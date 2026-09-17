@@ -5,7 +5,7 @@
 
 Ferramenta em Python para geração automática de cortes verticais (Shorts/Reels/TikTok) a partir de vídeos longos utilizando Inteligência Artificial.
 
-&gt; ⚠️ **Status do Projeto**: Work In Progresso (Iniciando desenvolvimento / Envio progressivo de módulos)
+&gt; ⚠️ **Status do Projeto**: Work In Progress (Iniciando desenvolvimento / Envio progressivo de módulos)
 
 ---
 

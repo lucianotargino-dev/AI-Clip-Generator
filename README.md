@@ -31,6 +31,9 @@ Neste primeiro momento, o repositório contém apenas os arquivos de configuraç
 ```text
 AI-Clip-Generator/
 │
+├── clip_generator/
+│   └── download.py          # Módulo de download de vídeos
+│
 ├── .gitignore               # Configurações de ignorar arquivos (herdado do projeto base)
 ├── README.md                # Esta documentação
 └── LICENCE

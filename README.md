@@ -19,6 +19,7 @@ Entre os principais objetivos desta evolução estão:
 
 - **Eliminação do processamento por API** nas etapas de mídia, garantindo que o processamento do vídeo e a transcrição ocorram de forma totalmente local na máquina do usuário;
 - **Aportuguesamento do projeto**, reestruturando e traduzindo o código-fonte (funções, variáveis, documentação e comentários) para o português, buscando maior clareza e padronização.
+- **Modelo de Dados Próprio**: Isolamento da lógica de negócios em relação aos retornos brutos de bibliotecas e SDKs externos.
 
 Atualmente, o projeto está em sua fase inicial de planejamento e estruturação.
 
@@ -34,7 +35,7 @@ AI-Clip-Generator/
 ├── clip_generator/
 │   └── download.py          # Módulo de download de vídeos
 │
-├── .gitignore               # Configurações de ignorar arquivos (herdado do projeto base)
+├── .gitignore               # Regra de ignorados do Git (herdado do projeto base)
 ├── README.md                # Esta documentação
 └── LICENCE
 ```
@@ -49,9 +50,13 @@ O código-fonte será adicionado e refatorado gradativamente. O pipeline que ser
 
 [ ] Módulo de Transcrição: Processamento local de áudio utilizando faster-whisper.
 
-[ ] Módulo de Destaques: Conexão com LLMs (como Gemini e ChatGPT) para identificar trechos com potencial viral.
+[ ] Módulo de Destaques: Filtro inteligente de momentos virais por LLM para identificar trechos com potencial viral.
 
-[ ] Módulo de Edição: Recorte automático com base nos carimbos de tempo e inserção de legendas.
+[ ] Módulo de LLM: Camada de conexão desacoplada com suporte inicial para Gemini e OpenAI (ChatGPT), e preparação para modelos locais (Ollama).
+
+[ ] Módulo de Edição: Extração de trechos e reenquadramento dinâmico com base nos carimbos de tempo.
+
+[ ] Módulo de Legendas: Geração e sobreposição de legendas animadas sincronizadas palavra por palavra.
 
 ---
 

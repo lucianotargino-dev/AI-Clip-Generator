@@ -96,7 +96,7 @@ def _obter_download_existente(diretorio_saida: str, video_id: str) -> Optional[s
     return None
 
 
-def download_youtube_local(video_url: str, resolucao: str = "720", diretorio_saida: Optional[str] = None) -> str:
+def download_youtube(video_url: str, resolucao: str = "720", diretorio_saida: Optional[str] = None) -> str:
     """Baixa um vídeo do YouTube ou retorna o caminho de um arquivo já existente."""
 
 

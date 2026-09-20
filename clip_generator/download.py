@@ -106,7 +106,6 @@ def download_youtube(video_url: str, resolucao: str = "720", diretorio_saida: Op
         print(f"[Download] Utilizando arquivo existente: {arquivo_existente}", flush=True)
         return arquivo_existente
 
-    yt_dlp = _importar_yt_dlp()
 
     # 2 - Verifica se o vídeo já foi baixado anteriormente.
     video_id = _extrair_video_id_youtube(video_url)
@@ -122,6 +121,7 @@ def download_youtube(video_url: str, resolucao: str = "720", diretorio_saida: Op
 
 
     # 3 - Baixa o vídeo do YouTube.
+    yt_dlp = _importar_yt_dlp()
     print(f"[Download] {video_url} @ {resolucao}p ? {diretorio_saida}/", flush=True)
     opcoes_yt_dlp = {
     "format": _obter_seletor_resolucao(resolucao),

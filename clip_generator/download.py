@@ -107,28 +107,29 @@ def download_youtube_local(video_url: str, resolucao: str = "720", diretorio_sai
         return arquivo_existente
 
     yt_dlp = _importar_yt_dlp()
-    diretorio_saida = diretorio_saida or DIRETORIO_SAIDA
-    os.makedirs(diretorio_saida, exist_ok=True)
-
 
     # 2 - Verifica se o vídeo já foi baixado anteriormente.
     video_id = _extrair_video_id_youtube(video_url)
     if video_id:
-        download_existente = _obter_download_existente(diretorio_saida, video_id)
+        diretorio_saida = diretorio_saida or os.path.join(DIRETORIO_SAIDA, f"projeto_{video_id}")
+        os.makedirs(diretorio_saida, exist_ok=True)
+        download_existente =_obter_download_existente(diretorio_saida, video_id)
         if download_existente:
             print(f"[Download] Reutilizando download existente: {download_existente}", flush=True)
             return download_existente
+    else:
+        raise RuntimeError(f"Não foi possível extrair o ID do vídeo do YouTube a partir da URL: {video_url}")
 
 
     # 3 - Baixa o vídeo do YouTube.
-    print(f"[Download] {video_url} @ {resolucao}p → {diretorio_saida}/", flush=True)
+    print(f"[Download] {video_url} @ {resolucao}p ? {diretorio_saida}/", flush=True)
     opcoes_yt_dlp = {
-        "format": _obter_seletor_resolucao(resolucao),
-        "outtmpl": os.path.join(diretorio_saida, "video_%(id)s.%(ext)s"),
-        "merge_output_format": "mp4",
-        "quiet": True,
-        "no_warnings": True,
-        "noprogress": False,
+    "format": _obter_seletor_resolucao(resolucao),
+    "outtmpl": os.path.join(diretorio_saida, "video_%(id)s.%(ext)s"),
+    "merge_output_format": "mp4",
+    "quiet": True,
+    "no_warnings": True,
+    "noprogress": True,
     }
 
     with yt_dlp.YoutubeDL(opcoes_yt_dlp) as ydl:
@@ -141,6 +142,5 @@ def download_youtube_local(video_url: str, resolucao: str = "720", diretorio_sai
                 if os.path.exists(nome_arquivo + extensao):
                     download_atual = nome_arquivo + extensao
                     break
-
     print(f"[Download] Download concluído: {download_atual}", flush=True)
     return download_atual

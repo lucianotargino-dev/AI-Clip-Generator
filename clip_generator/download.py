@@ -17,14 +17,16 @@ DIRETORIO_SAIDA = "saida" # provisiorio
 
 def _importar_yt_dlp():
     try:
-        import yt_dlp   # type: ignore
+        import yt_dlp  # type: ignore
+        from yt_dlp.utils import DownloadError
     except ImportError as e:
         raise RuntimeError(
             "A biblioteca 'yt-dlp' é necessária para baixar vídeos do YouTube.\n"
             "Instale-a com:\n"
-            "   pip install -r requirements.txt"
+            "    pip install -r requirements.txt"
         ) from e
-    return yt_dlp
+
+    return yt_dlp, DownloadError
 
 
 def _obter_seletor_resolucao(resolucao: str) -> str:
@@ -121,7 +123,7 @@ def download_youtube(video_url: str, resolucao: str = "720", diretorio_saida: Op
 
 
     # 3 - Baixa o vídeo do YouTube.
-    yt_dlp = _importar_yt_dlp()
+    yt_dlp, DownloadError = _importar_yt_dlp()
     print(f"[Download] {video_url} @ {resolucao}p → {diretorio_saida}/", flush=True)
     opcoes_yt_dlp = {
     "format": _obter_seletor_resolucao(resolucao),
@@ -132,15 +134,20 @@ def download_youtube(video_url: str, resolucao: str = "720", diretorio_saida: Op
     "noprogress": True,
     }
 
-    with yt_dlp.YoutubeDL(opcoes_yt_dlp) as ydl:
-        informacoes = ydl.extract_info(video_url, download=True)
-        download_atual = ydl.prepare_filename(informacoes)
-        # Após a mesclagem, a extensão do arquivo pode ser alterada.
-        if not os.path.exists(download_atual):
-            nome_arquivo, _ = os.path.splitext(download_atual)
-            for extensao in (".mp4", ".mkv", ".webm"):
-                if os.path.exists(nome_arquivo + extensao):
-                    download_atual = nome_arquivo + extensao
-                    break
+    try:
+        with yt_dlp.YoutubeDL(opcoes_yt_dlp) as ydl:
+            informacoes = ydl.extract_info(video_url, download=True)
+            download_atual = ydl.prepare_filename(informacoes)
+            # Após a mesclagem, a extensão do arquivo pode ser alterada.
+            if not os.path.exists(download_atual):
+                nome_arquivo, _ = os.path.splitext(download_atual)
+                for extensao in (".mp4", ".mkv", ".webm"):
+                    if os.path.exists(nome_arquivo + extensao):
+                        download_atual = nome_arquivo + extensao
+                        break
+
+    except DownloadError as e:
+        raise RuntimeError(f"Falha ao baixar o vídeo do YouTube: {e}") from e
+
     print(f"[Download] Download concluído: {download_atual}", flush=True)
     return download_atual

@@ -122,7 +122,7 @@ def download_youtube(video_url: str, resolucao: str = "720", diretorio_saida: Op
 
     # 3 - Baixa o vídeo do YouTube.
     yt_dlp = _importar_yt_dlp()
-    print(f"[Download] {video_url} @ {resolucao}p ? {diretorio_saida}/", flush=True)
+    print(f"[Download] {video_url} @ {resolucao}p → {diretorio_saida}/", flush=True)
     opcoes_yt_dlp = {
     "format": _obter_seletor_resolucao(resolucao),
     "outtmpl": os.path.join(diretorio_saida, "video_%(id)s.%(ext)s"),

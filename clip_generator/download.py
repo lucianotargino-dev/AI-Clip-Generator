@@ -7,6 +7,7 @@ retornando o caminho do arquivo para as próximas etapas do pipeline.
 """
 import os
 import re
+import platform
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from typing import Optional
@@ -27,6 +28,72 @@ def _importar_yt_dlp():
         ) from e
 
     return yt_dlp, DownloadError
+
+
+def _salvar_link_video(video_url: str, caminho_video: str) -> Optional[str]:
+    """
+    Cria um arquivo de link para o vídeo original, utilizando
+    o formato nativo do sistema operacional.
+
+    Windows -> .url
+    Linux   -> .desktop
+    macOS   -> .webloc
+
+    Args:
+        video_url: URL original do vídeo.
+        caminho_video: Caminho do vídeo baixado.
+
+    Returns:
+        Caminho do arquivo de link criado.
+    """
+
+    sistema = platform.system()
+
+    caminho = Path(caminho_video)
+    nome_link = f"link_{caminho.stem.removeprefix('video_')}"
+
+    if sistema == "Windows":
+        caminho_link = caminho.with_name(f"{nome_link}.url")
+
+        conteudo = (
+            "[InternetShortcut]\n"
+            f"URL={video_url}\n"
+        )
+
+    elif sistema == "Linux":
+        caminho_link = caminho.with_name(f"{nome_link}.desktop")
+
+        conteudo = (
+            "[Desktop Entry]\n"
+            "Type=Link\n"
+            f"URL={video_url}\n"
+        )
+
+    elif sistema == "Darwin":
+        caminho_link = caminho.with_name(f"{nome_link}.webloc")
+
+        conteudo = f"""<?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+        "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>URL</key>
+            <string>{video_url}</string>
+        </dict>
+        </plist>
+        """
+
+    else:
+        raise OSError(
+            f"Sistema operacional não suportado: {sistema}"
+        )
+
+    caminho_link.write_text(conteudo, encoding="utf-8")
+
+    if caminho_link.exists():
+        return str(caminho_link)
+    
+    return None
 
 
 def _obter_seletor_resolucao(resolucao: str) -> str:

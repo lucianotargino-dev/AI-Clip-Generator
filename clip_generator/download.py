@@ -176,47 +176,55 @@ def download_youtube(video_url: str, resolucao: str = "720", diretorio_saida: Op
         return arquivo_existente
 
     
-    # 2 - Verifica se o vídeo já foi baixado anteriormente.
+    # A partir daqui, sabemos que estamos tratando de um vídeo do YouTube
     video_id = _extrair_video_id_youtube(video_url)
-    if video_id:
-        diretorio_saida = diretorio_saida or os.path.join(DIRETORIO_SAIDA, f"projeto_{video_id}")
-        os.makedirs(diretorio_saida, exist_ok=True)
-        download_existente = _obter_download_existente(diretorio_saida, video_id)
-        if download_existente:
-            print(f"[Download] Link para o video original salvo em {_salvar_link_video(video_url, download_existente)}", flush=True)
-            print(f"[Download] Reutilizando download existente: {download_existente}", flush=True)
-            return download_existente
-    else:
+    if not video_id:
         raise RuntimeError(f"URL do YouTube inválida: {video_url}")
+
+    diretorio_saida = diretorio_saida or os.path.join(DIRETORIO_SAIDA, f"projeto_{video_id}")
+    os.makedirs(diretorio_saida, exist_ok=True)
+
+    # 2 - Verifica se o vídeo já foi baixado anteriormente.
+    download_existente = _obter_download_existente(diretorio_saida, video_id)
+    if download_existente:
+        caminho_video = download_existente
+        print(f"[Download] Reutilizando download existente: {download_existente}", flush=True)
 
 
     # 3 - Baixa o vídeo do YouTube.
-    yt_dlp, DownloadError = _importar_yt_dlp()
-    print(f"[Download] {video_url} @ {resolucao}p → {diretorio_saida}/", flush=True)
-    opcoes_yt_dlp = {
-    "format": _obter_seletor_resolucao(resolucao),
-    "outtmpl": os.path.join(diretorio_saida, "video_%(id)s.%(ext)s"),
-    "merge_output_format": "mp4",
-    "quiet": True,
-    "no_warnings": True,
-    "noprogress": True,
-    }
+    else:
+        print(f"[Download] {video_url} @ {resolucao}p → "f"{diretorio_saida}/", flush=True)
+        opcoes_yt_dlp = {
+        "format": _obter_seletor_resolucao(resolucao),
+        "outtmpl": os.path.join(diretorio_saida, "video_%(id)s.%(ext)s"),
+        "merge_output_format": "mp4",
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        }
 
-    try:
-        with yt_dlp.YoutubeDL(opcoes_yt_dlp) as ydl:
-            informacoes = ydl.extract_info(video_url, download=True)
-            download_atual = ydl.prepare_filename(informacoes)
-            # Após a mesclagem, a extensão do arquivo pode ser alterada.
-            if not os.path.exists(download_atual):
-                nome_arquivo, _ = os.path.splitext(download_atual)
-                for extensao in (".mp4", ".mkv", ".webm"):
-                    if os.path.exists(nome_arquivo + extensao):
-                        download_atual = nome_arquivo + extensao
-                        print(f"[Download] Link para o video original salvo em {_salvar_link_video(video_url, download_atual)}", flush=True)
-                        break
+        try:
+            yt_dlp, DownloadError = _importar_yt_dlp()
+            with yt_dlp.YoutubeDL(opcoes_yt_dlp) as ydl:
+                informacoes = ydl.extract_info(video_url, download=True)
+                download_atual = ydl.prepare_filename(informacoes)
+                # Após a mesclagem, a extensão pode ser alterada.
+                if not os.path.exists(download_atual):
+                    nome_arquivo, _ = os.path.splitext(download_atual)
+                    for extensao in (".mp4", ".mkv", ".webm"):
+                        caminho_final = nome_arquivo + extensao
+                        if os.path.exists(caminho_final):
+                            caminho_video = download_atual = caminho_final
+                            break
 
-    except DownloadError as e:
-        raise RuntimeError(f"Falha ao baixar o vídeo do YouTube: {e}") from e
-    
-    print(f"[Download] Download concluído: {download_atual}", flush=True)
-    return download_atual
+        except DownloadError as e:
+            raise RuntimeError(f"Falha ao baixar o vídeo do YouTube: {e}") from e
+
+        print(f"[Download] Download concluído: {caminho_video}", flush=True)
+        
+    # Vídeo veio do YouTube em ambos os casos:
+    # - download existente
+    # - download atual
+    caminho_link = _salvar_link_video(video_url, caminho_video)
+    print(f"[Download] Link para o vídeo original salvo em {caminho_link}",flush=True)
+    return caminho_video

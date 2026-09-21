@@ -175,18 +175,19 @@ def download_youtube(video_url: str, resolucao: str = "720", diretorio_saida: Op
         print(f"[Download] Utilizando arquivo existente: {arquivo_existente}", flush=True)
         return arquivo_existente
 
-
+    
     # 2 - Verifica se o vídeo já foi baixado anteriormente.
     video_id = _extrair_video_id_youtube(video_url)
     if video_id:
         diretorio_saida = diretorio_saida or os.path.join(DIRETORIO_SAIDA, f"projeto_{video_id}")
         os.makedirs(diretorio_saida, exist_ok=True)
-        download_existente =_obter_download_existente(diretorio_saida, video_id)
+        download_existente = _obter_download_existente(diretorio_saida, video_id)
         if download_existente:
+            print(f"[Download] Link para o video original salvo em {_salvar_link_video(video_url, download_existente)}", flush=True)
             print(f"[Download] Reutilizando download existente: {download_existente}", flush=True)
             return download_existente
     else:
-        raise RuntimeError(f"Não foi possível extrair o ID do vídeo do YouTube a partir da URL: {video_url}")
+        raise RuntimeError(f"URL do YouTube inválida: {video_url}")
 
 
     # 3 - Baixa o vídeo do YouTube.
@@ -211,10 +212,11 @@ def download_youtube(video_url: str, resolucao: str = "720", diretorio_saida: Op
                 for extensao in (".mp4", ".mkv", ".webm"):
                     if os.path.exists(nome_arquivo + extensao):
                         download_atual = nome_arquivo + extensao
+                        print(f"[Download] Link para o video original salvo em {_salvar_link_video(video_url, download_atual)}", flush=True)
                         break
 
     except DownloadError as e:
         raise RuntimeError(f"Falha ao baixar o vídeo do YouTube: {e}") from e
-
+    
     print(f"[Download] Download concluído: {download_atual}", flush=True)
     return download_atual

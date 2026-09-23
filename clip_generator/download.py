@@ -30,6 +30,23 @@ def _importar_yt_dlp():
     return yt_dlp, DownloadError
 
 
+def _obter_titulo_video(video_url: str) -> str:
+    """Obtém o título atual de um vídeo do YouTube sem realizar o download."""
+    yt_dlp, DownloadError = _importar_yt_dlp()
+    opcoes_yt_dlp = {
+        "quiet": True,
+        "no_warnings": True,
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(opcoes_yt_dlp) as ydl:
+            informacoes = ydl.extract_info(video_url, download=False)
+        return informacoes["title"]
+    
+    except DownloadError as e:
+        raise RuntimeError(f"Falha ao obter informações do vídeo do YouTube: {e}") from e
+    
+
 def _salvar_link_video(video_url: str, caminho_video: str) -> Optional[str]:
     """
     Cria um arquivo de link para o vídeo original, utilizando
@@ -221,7 +238,7 @@ def download_youtube(video_url: str, resolucao: str = "720", diretorio_saida: Op
             raise RuntimeError(f"Falha ao baixar o vídeo do YouTube: {e}") from e
 
         print(f"[Download] Download concluído: {caminho_video}", flush=True)
-        
+
     # Vídeo veio do YouTube em ambos os casos:
     # - download existente
     # - download atual

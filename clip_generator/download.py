@@ -45,7 +45,35 @@ def _obter_titulo_video(video_url: str) -> str:
     
     except DownloadError as e:
         raise RuntimeError(f"Falha ao obter informações do vídeo do YouTube: {e}") from e
-    
+
+
+def _preparar_nome_para_pasta(nome: str) -> str:
+    """
+    Prepara um texto para ser utilizado como nome de pasta.
+    Remove caracteres inválidos em nomes de arquivos e pastas
+    e ajusta espaços e caracteres problemáticos.
+
+    Args:
+        nome: Nome original da pasta.
+
+    Returns:
+        Nome preparado para utilização como pasta.
+    """
+
+    # Remove caracteres inválidos para Windows/Linux/macOS.
+    nome = re.sub(r'[<>:"/\\|?*]', '', nome)
+
+    # Remove caracteres de controle.
+    nome = re.sub(r'[\x00-\x1F]', '', nome)
+
+    # Substitui sequências de espaços por um único espaço.
+    nome = re.sub(r'\s+', ' ', nome)
+
+    # Remove espaços e pontos no final.
+    nome = nome.rstrip(' .')
+
+    return nome
+
 
 def _salvar_link_video(video_url: str, caminho_video: str) -> Optional[str]:
     """

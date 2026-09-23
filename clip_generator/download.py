@@ -32,6 +32,7 @@ def _importar_yt_dlp():
 
 def _obter_titulo_video(video_url: str) -> str:
     """Obtém o título atual de um vídeo do YouTube sem realizar o download."""
+
     yt_dlp, DownloadError = _importar_yt_dlp()
     opcoes_yt_dlp = {
         "quiet": True,
@@ -47,7 +48,7 @@ def _obter_titulo_video(video_url: str) -> str:
         raise RuntimeError(f"Falha ao obter informações do vídeo do YouTube: {e}") from e
 
 
-def _preparar_nome_para_pasta(nome: str) -> str:
+def _preparar_nome_para_diretorio(nome: str) -> str:
     """
     Prepara um texto para ser utilizado como nome de pasta.
     Remove caracteres inválidos em nomes de arquivos e pastas
@@ -98,6 +99,46 @@ def _obter_diretorio_projeto(diretorio_saida: str, video_id: str) -> Optional[st
             return str(caminho)
 
     return None
+
+
+def _preparar_diretorio_projeto(diretorio_saida: str, video_id: str, titulo: str) -> str:
+    """
+    Cria ou atualiza o diretório de um projeto do YouTube.
+
+    O diretório é identificado pelo ID do vídeo e recebe o título
+    atual do vídeo em seu nome.
+
+    Args:
+        diretorio_saida: Diretório onde os projetos são armazenados.
+        video_id: ID do vídeo do YouTube.
+        titulo: Título atual do vídeo.
+
+    Returns:
+        Caminho do diretório do projeto.
+    """
+
+    titulo = _preparar_nome_para_diretorio(titulo)
+
+    nome_diretorio = f"projeto_{video_id} - {titulo}"
+    novo_diretorio = Path(diretorio_saida) / nome_diretorio
+
+    diretorio_existente = _obter_diretorio_projeto(diretorio_saida, video_id)
+
+    # Projeto ainda não existe.
+    if not diretorio_existente:
+        novo_diretorio.mkdir(parents=True, exist_ok=True)
+        return str(novo_diretorio)
+
+    diretorio_existente = Path(diretorio_existente)
+
+    # O diretório já possui o nome correto.
+    if diretorio_existente == novo_diretorio:
+        return str(diretorio_existente)
+
+    # O diretório existe, mas o título está desatualizado.
+    diretorio_existente.rename(novo_diretorio)
+
+    return str(novo_diretorio)
 
 
 def _salvar_link_video(video_url: str, caminho_video: str) -> Optional[str]:

@@ -75,6 +75,31 @@ def _preparar_nome_para_pasta(nome: str) -> str:
     return nome
 
 
+def _obter_diretorio_projeto(diretorio_saida: str, video_id: str) -> Optional[str]:
+    """
+    Localiza o diretório de um projeto pelo ID do vídeo.
+    O diretório deve começar com 'projeto_{id_video}'.
+    
+    Args:
+        diretorio_saida: Diretório onde os projetos são armazenados.
+        video_id: ID do vídeo do YouTube.
+
+    Returns:
+        Caminho do diretório encontrado ou None caso não exista.
+    """
+
+    prefixo = f"projeto_{video_id}"
+
+    for caminho in Path(diretorio_saida).iterdir():
+        if not caminho.is_dir():
+            continue
+
+        if caminho.name == prefixo or caminho.name.startswith(f"{prefixo} - "):
+            return str(caminho)
+
+    return None
+
+
 def _salvar_link_video(video_url: str, caminho_video: str) -> Optional[str]:
     """
     Cria um arquivo de link para o vídeo original, utilizando

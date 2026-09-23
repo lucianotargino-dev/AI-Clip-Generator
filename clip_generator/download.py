@@ -292,8 +292,9 @@ def download_youtube(video_url: str, resolucao: str = "720", diretorio_saida: Op
     if not video_id:
         raise RuntimeError(f"URL do YouTube inválida: {video_url}")
 
-    diretorio_saida = diretorio_saida or os.path.join(DIRETORIO_SAIDA, f"projeto_{video_id}")
-    os.makedirs(diretorio_saida, exist_ok=True)
+    diretorio_saida = diretorio_saida or DIRETORIO_SAIDA
+    titulo_video = _obter_titulo_video(video_url)
+    diretorio_saida = _preparar_diretorio_projeto(diretorio_saida, video_id, titulo_video)
 
     # 2 - Verifica se o vídeo já foi baixado anteriormente.
     download_existente = _obter_download_existente(diretorio_saida, video_id)

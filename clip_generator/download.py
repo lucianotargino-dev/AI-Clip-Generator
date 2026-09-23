@@ -312,7 +312,7 @@ def download_youtube(video_url: str, resolucao: str = "720", diretorio_saida: Op
         "merge_output_format": "mp4",
         "quiet": True,
         "no_warnings": True,
-        "noprogress": True,
+        "noprogress": False,
         }
 
         try:

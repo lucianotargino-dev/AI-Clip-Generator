@@ -33,7 +33,8 @@ Neste primeiro momento, o repositório contém apenas os arquivos de configuraç
 AI-Clip-Generator/
 │
 ├── clip_generator/
-│   └── download.py          # Módulo de download de vídeos
+│   ├── download.py          # Módulo de download de vídeos
+│   └── configuracao.py     # Módulo de configuração que contém as constantes do projeto
 │
 ├── .gitignore               # Regra de ignorados do Git (herdado do projeto base)
 ├── README.md                # Esta documentação

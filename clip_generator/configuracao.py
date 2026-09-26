@@ -1,0 +1,1 @@
+DIRETORIO_SAIDA = "saida"

@@ -30,24 +30,6 @@ def _importar_yt_dlp():
     return yt_dlp, DownloadError
 
 
-def _obter_titulo_video(video_url: str) -> str:
-    """Obtém o título atual de um vídeo do YouTube sem realizar o download."""
-
-    yt_dlp, DownloadError = _importar_yt_dlp()
-    opcoes_yt_dlp = {
-        "quiet": True,
-        "no_warnings": True,
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(opcoes_yt_dlp) as ydl:
-            informacoes = ydl.extract_info(video_url, download=False)
-        return informacoes["title"]
-    
-    except DownloadError as e:
-        raise RuntimeError(f"Falha ao obter informações do vídeo do YouTube: {e}") from e
-
-
 def _preparar_nome_para_diretorio(nome: str) -> str:
     """
     Prepara um texto para ser utilizado como nome de pasta.

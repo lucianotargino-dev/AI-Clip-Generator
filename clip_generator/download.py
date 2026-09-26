@@ -12,8 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 from typing import Optional
 
-# from ..config import LOCAL_OUTPUT_DIR
-DIRETORIO_SAIDA = "saida" # provisiorio
+from .configuracao import DIRETORIO_SAIDA
 
 
 def _importar_yt_dlp():

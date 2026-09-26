@@ -280,63 +280,95 @@ def download_youtube(video_url: str, resolucao: str = "720", diretorio_saida: Op
     """Baixa um vídeo do YouTube ou retorna o caminho de um arquivo já existente."""
 
 
-    # 1 - Verifica se a URL é um caminho de arquivo local.
+    # 1. Vídeo local
     arquivo_existente = _resolver_caminho_local(video_url)
     if arquivo_existente:
         print(f"[Download] Utilizando arquivo existente: {arquivo_existente}", flush=True)
         return arquivo_existente
 
-    
-    # A partir daqui, sabemos que estamos tratando de um vídeo do YouTube
+
+    # 2. Vídeo do YouTube
+    yt_dlp, DownloadError = _importar_yt_dlp()
+
     video_id = _extrair_video_id_youtube(video_url)
     if not video_id:
         raise RuntimeError(f"URL do YouTube inválida: {video_url}")
 
     diretorio_saida = diretorio_saida or DIRETORIO_SAIDA
-    titulo_video = _obter_titulo_video(video_url)
-    diretorio_saida = _preparar_diretorio_projeto(diretorio_saida, video_id, titulo_video)
 
-    # 2 - Verifica se o vídeo já foi baixado anteriormente.
-    download_existente = _obter_download_existente(diretorio_saida, video_id)
+    # Localiza o projeto existente pelo ID do vídeo.
+    diretorio_projeto = _obter_diretorio_projeto(diretorio_saida, video_id)
+
+    # Se o projeto ainda não existe, cria um diretório provisório utilizando somente o ID até obter as informações do vídeo.
+    if not diretorio_projeto:
+        diretorio_projeto = os.path.join(diretorio_saida, f"projeto_{video_id}")
+        os.makedirs(diretorio_projeto, exist_ok=True)
+
+    # Verifica se o vídeo já foi baixado.
+    download_existente = _obter_download_existente(diretorio_projeto, video_id)
+
+    # Vídeo já existe: consulta apenas as informações do vídeo para atualizar o nome do projeto.
     if download_existente:
-        caminho_video = download_existente
         print(f"[Download] Reutilizando download existente: {download_existente}", flush=True)
 
-
-    # 3 - Baixa o vídeo do YouTube.
-    else:
-        print(f"[Download] {video_url} @ {resolucao}p → "f"{diretorio_saida}/", flush=True)
         opcoes_yt_dlp = {
-        "format": _obter_seletor_resolucao(resolucao),
-        "outtmpl": os.path.join(diretorio_saida, "video_%(id)s.%(ext)s"),
-        "merge_output_format": "mp4",
-        "quiet": True,
-        "no_warnings": True,
-        "noprogress": False,
+            "quiet": True, 
+            "no_warnings": True
+            }
+
+        try:
+            with yt_dlp.YoutubeDL(opcoes_yt_dlp) as ydl:
+                informacoes = ydl.extract_info(video_url, download=False)
+
+            titulo_video = (f"{informacoes['channel']} ~.~ {informacoes['title']}")
+            diretorio_projeto = _preparar_diretorio_projeto(diretorio_saida, video_id, titulo_video)
+
+            # O caminho do vídeo muda caso a pasta tenha sido renomeada.
+            caminho_video = os.path.join(diretorio_projeto, os.path.basename(download_existente))
+
+        except DownloadError as e:
+            print(f"[Download] Falha ao obter informações atuais do vídeo ({e}). Utilizando a pasta existente como está.", flush=True)
+
+    # Caso ainda não exista, faz o download.
+    else:
+        print(f"[Download] {video_url} @ {resolucao}p → {diretorio_projeto}/", flush=True)
+
+        opcoes_yt_dlp = {
+            "format": _obter_seletor_resolucao(resolucao),
+            "outtmpl": os.path.join(diretorio_projeto, "video_%(id)s.%(ext)s"),
+            "merge_output_format": "mp4",
+            "quiet": True,
+            "no_warnings": True,
+            "noprogress": False,
         }
 
         try:
-            yt_dlp, DownloadError = _importar_yt_dlp()
             with yt_dlp.YoutubeDL(opcoes_yt_dlp) as ydl:
                 informacoes = ydl.extract_info(video_url, download=True)
+                titulo_video = (f"{informacoes['channel']} ~.~ {informacoes['title']}")
                 download_atual = ydl.prepare_filename(informacoes)
-                # Após a mesclagem, a extensão pode ser alterada.
+                # Após a mesclagem, a extensão do arquivo pode ser alterada.
                 if not os.path.exists(download_atual):
                     nome_arquivo, _ = os.path.splitext(download_atual)
                     for extensao in (".mp4", ".mkv", ".webm"):
-                        caminho_final = nome_arquivo + extensao
-                        if os.path.exists(caminho_final):
-                            caminho_video = download_atual = caminho_final
+                        if os.path.exists(nome_arquivo + extensao):
+                            download_atual = nome_arquivo + extensao
                             break
 
         except DownloadError as e:
             raise RuntimeError(f"Falha ao baixar o vídeo do YouTube: {e}") from e
 
+        # Atualiza o nome do projeto após obter as informações do vídeo.
+        diretorio_projeto_novo = _preparar_diretorio_projeto(diretorio_saida, video_id, titulo_video)
+
+        # O caminho do vídeo muda caso a pasta tenha sido renomeada.
+        caminho_video = os.path.join(diretorio_projeto_novo, os.path.basename(download_atual))
+
         print(f"[Download] Download concluído: {caminho_video}", flush=True)
 
-    # Vídeo veio do YouTube em ambos os casos:
-    # - download existente
-    # - download atual
+    # 3. Este ponto só é alcançado para vídeos do YouTube.
     caminho_link = _salvar_link_video(video_url, caminho_video)
-    print(f"[Download] Link para o vídeo original salvo em {caminho_link}",flush=True)
+
+    print(f"[Download] Link para o vídeo original salvo em: {caminho_link}", flush=True)
+
     return caminho_video

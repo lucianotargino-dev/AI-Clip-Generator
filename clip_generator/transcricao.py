@@ -10,9 +10,7 @@ import re
 from pathlib import Path
 from typing import Dict, Optional
 
-from .configuracao import DIRETORIO_SAIDA
-DISPOSITIVO_WHISPER = "auto"    # provisório
-MODELO_WHISPER = "base"         # provisório
+from .configuracao import DIRETORIO_SAIDA, DISPOSITIVO_WHISPER, MODELO_WHISPER
 
 
 def _obter_caminho_para_transcricao(caminho_midia: str) -> Path:
@@ -136,16 +134,7 @@ def transcrever(caminho_midia: str, idioma: Optional[str] = None) -> Dict:
     tipo_computacao = "float16" if dispositivo == "cuda" else "int8"
     print(f"[Transcrição] Modelo: {MODELO_WHISPER} | Dispositivo: {dispositivo}", flush=True)
 
-    # from ..config import LOCAL_WHISPER_VAD_FILTER, LOCAL_WHISPER_VAD_PARAMETERS
-    FILTRO_WHISPER_VAD = False      #provisório
-    PARAMETROS_WHISPER_VAD = {      #provisório
-        "threshold": 0.5,
-        "min_speech_duration_ms": 250,
-        "max_speech_duration_s": float("inf"),
-        "min_silence_duration_ms": 2000,
-        "speech_pad_ms": 400,
-    }
-
+    from .configuracao import FILTRO_WHISPER_VAD, PARAMETROS_WHISPER_VAD
 
     modelo = WhisperModel(MODELO_WHISPER, device=dispositivo, compute_type=tipo_computacao)
 

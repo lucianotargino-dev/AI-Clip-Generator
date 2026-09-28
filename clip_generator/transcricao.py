@@ -1,93 +1,102 @@
-"""Local transcription via faster-whisper.
+"""Transcrição local utilizando faster-whisper.
 
-Reads a local media file and returns the same shape the highlight generator
-expects: {duration, segments[start, end, text]}.
+Lê um arquivo de mídia local e retorna os dados no formato esperado pelo
+gerador de cortes:
+{duracao, segmentos[inicio, fim, texto]}.
 """
+
 import os
 import re
 from pathlib import Path
 from typing import Dict, Optional
 
-from ..config import LOCAL_OUTPUT_DIR, LOCAL_WHISPER_DEVICE, LOCAL_WHISPER_MODEL
+from .configuracao import DIRETORIO_SAIDA
+DISPOSITIVO_WHISPER = "auto"    # provisório
+MODELO_WHISPER = "base"         # provisório
 
 
-def _transcript_cache_path(media_path: str) -> Path:
-    """Return the .srt cache path for a media file."""
-    cache_dir = Path(LOCAL_OUTPUT_DIR)
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir / (Path(media_path).stem + ".srt")
+def _obter_caminho_para_transcricao(caminho_midia: str) -> Path:
+    """Retorna o caminho onde será salvo o arquivo de transcrição (.srt) da mídia."""
+    diretorio_saida = Path(DIRETORIO_SAIDA)
+    diretorio_saida.mkdir(parents=True, exist_ok=True)
+    return diretorio_saida / (Path(caminho_midia).stem + ".srt")
 
 
-def _format_srt_timestamp(seconds: float) -> str:
-    total_ms = max(0, int(round(seconds * 1000)))
-    ms = total_ms % 1000
-    total_s = total_ms // 1000
-    s = total_s % 60
-    total_m = total_s // 60
-    m = total_m % 60
-    h = total_m // 60
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+def _converter_segundos_em_timestamp_srt(segundos: float) -> str:
+    """Converte segundos para timestamp SRT."""
+    total_milissegundos = max(0, int(round(segundos * 1000)))
+    milissegundos = total_milissegundos % 1000
+    total_segundos = total_milissegundos // 1000
+    segundos = total_segundos % 60
+    total_minutos = total_segundos // 60
+    minutos = total_minutos % 60
+    horas = total_minutos // 60
+    return f"{horas:02d}:{minutos:02d}:{segundos:02d},{milissegundos:03d}"
 
 
-def _parse_srt_timestamp(value: str) -> float:
-    match = re.fullmatch(r"(\d{2}):(\d{2}):(\d{2}),(\d{3})", value.strip())
-    if not match:
-        raise ValueError(f"Invalid SRT timestamp: {value!r}")
-    hours, minutes, seconds, millis = map(int, match.groups())
-    return hours * 3600 + minutes * 60 + seconds + (millis / 1000.0)
+def _converter_timestamp_srt_em_segundos(timestamp_srt: str) -> float:
+    """Converte timestamp SRT para segundos."""
+    resultado = re.fullmatch(r"(\d{2}):(\d{2}):(\d{2}),(\d{3})", timestamp_srt.strip())
+    if not resultado:
+        raise ValueError(f"Formato de timestamp SRT inválido: {timestamp_srt!r}")
+    horas, minutos, segundos, milissegundos = map(int, resultado.groups())
+    return horas * 3600 + minutos * 60 + segundos + (milissegundos / 1000.0)
 
 
-def _write_srt_cache(media_path: str, transcript: Dict) -> Path:
-    cache_path = _transcript_cache_path(media_path)
-    lines = []
-    for idx, segment in enumerate(transcript.get("segments", []), start=1):
-        start = _format_srt_timestamp(float(segment["start"]))
-        end = _format_srt_timestamp(float(segment["end"]))
-        text = str(segment.get("text", "")).strip().replace("\r", "").replace("\n", " ")
-        lines.append(str(idx))
-        lines.append(f"{start} --> {end}")
-        lines.append(text)
-        lines.append("")
+def _salvar_transcricao_srt(caminho_video: str, transcricao: Dict) -> Path:
+    """Gera um arquivo de transcrição no formato SRT."""
+    caminho_transcricao = _obter_caminho_para_transcricao(caminho_video)
+    linhas = []
+    for indice, segmento in enumerate(transcricao.get("segmentos", []), start=1):
+        inicio = _converter_segundos_em_timestamp_srt(float(segmento["inicio"]))
+        fim = _converter_segundos_em_timestamp_srt(float(segmento["fim"]))
+        texto = str(segmento.get("texto", "")).strip().replace("\r", "").replace("\n", " ")
+        linhas.append(str(indice))
+        linhas.append(f"{inicio} --> {fim}")
+        linhas.append(texto)
+        linhas.append("")
 
-    cache_path.write_text("\n".join(lines), encoding="utf-8")
-    return cache_path
+    caminho_transcricao.write_text("\n".join(linhas), encoding="utf-8")
+    return caminho_transcricao
 
 
-def _load_srt_cache(cache_path: Path) -> Dict:
-    content = cache_path.read_text(encoding="utf-8-sig").strip()
-    if not content:
-        return {"duration": 0.0, "segments": []}
+def _carregar_transcricao_srt(caminho_transcricao: Path) -> Dict:
+    """Carrega uma transcrição de um arquivo no formato SRT."""
+    conteudo = caminho_transcricao.read_text(encoding="utf-8-sig").strip()
+    if not conteudo:
+        return {"duracao": 0.0, "segmentos": []}
 
-    segments = []
-    for block in re.split(r"\n\s*\n", content):
-        lines = [line.strip("\ufeff") for line in block.splitlines() if line.strip()]
-        if not lines:
+    segmentos = []
+    for bloco in re.split(r"\n\s*\n", conteudo):
+        linhas = [linha.strip("\ufeff") for linha in bloco.splitlines() if linha.strip()]
+        if not linhas:
             continue
-        if "-->" not in lines[0] and len(lines) > 1 and "-->" in lines[1]:
-            lines = lines[1:]
-        if not lines or "-->" not in lines[0]:
+        if "-->" not in linhas[0] and len(linhas) > 1 and "-->" in linhas[1]:
+            linhas = linhas[1:]
+        if not linhas or "-->" not in linhas[0]:
             continue
-        start_raw, end_raw = [part.strip() for part in lines[0].split("-->", 1)]
-        text = "\n".join(lines[1:]).strip()
-        segments.append(
+        inicio_texto, fim_texto = [parte.strip() for parte in linhas[0].split("-->", 1)]
+        texto = "\n".join(linhas[1:]).strip()
+        segmentos.append(
             {
-                "start": _parse_srt_timestamp(start_raw),
-                "end": _parse_srt_timestamp(end_raw),
-                "text": text,
+                "inicio": _converter_timestamp_srt_em_segundos(inicio_texto),
+                "fim": _converter_timestamp_srt_em_segundos(fim_texto),
+                "texto": texto,
             }
         )
 
-    duration = segments[-1]["end"] if segments else 0.0
-    return {"duration": duration, "segments": segments}
+    duracao = segmentos[-1]["fim"] if segmentos else 0.0
+    return {"duracao": duracao, "segmentos": segmentos}
 
 
-def _resolve_device() -> str:
-    if LOCAL_WHISPER_DEVICE != "auto":
-        return LOCAL_WHISPER_DEVICE
+def _obter_dispositivo_whisper() -> str:
+    """Determina o dispositivo que será utilizado pelo Whisper."""
+    if DISPOSITIVO_WHISPER != "auto":
+        return DISPOSITIVO_WHISPER
     try:
         import torch  # type: ignore
         if torch.cuda.is_available():
-            # Test that CUDA actually works (catches missing cuBLAS/cuDNN libs)
+            # Verifica se o CUDA realmente está funcional (detecta ausência de bibliotecas como cuBLAS e cuDNN)
             torch.zeros(1, device="cuda")
             return "cuda"
     except (ImportError, OSError, RuntimeError):
@@ -95,68 +104,76 @@ def _resolve_device() -> str:
     return "cpu"
 
 
-def transcribe_local(media_path: str, language: Optional[str] = None) -> Dict:
-    """Run faster-whisper on a local file path, caching the result as .srt."""
-    cache_path = _transcript_cache_path(media_path)
-    if cache_path.exists():
-        source_mtime = os.path.getmtime(media_path)
-        cache_mtime = cache_path.stat().st_mtime
-        if cache_mtime >= source_mtime:
-            print(f"[transcribe/local] reusing cached transcript: {cache_path}", flush=True)
-            cached = _load_srt_cache(cache_path)
-            # Treat empty cache as invalid (likely from a failed/partial run) — delete and re-transcribe
-            if not cached["segments"] or cached["duration"] <= 0.0:
-                print(f"[transcribe/local] cache is empty/invalid, deleting: {cache_path}", flush=True)
-                cache_path.unlink(missing_ok=True)
+def transcrever(caminho_midia: str, idioma: Optional[str] = None) -> Dict:
+    """Transcreve uma mídia e reutiliza uma transcrição SRT existente quando possível."""
+    caminho_transcricao = _obter_caminho_para_transcricao(caminho_midia)
+    if caminho_transcricao.exists():
+        data_modificacao_midia = os.path.getmtime(caminho_midia)
+        data_modificacao_transcricao = caminho_transcricao.stat().st_mtime
+        if data_modificacao_transcricao >= data_modificacao_midia:
+            print(f"[Transcrição] Reutilizando transcrição existente: {caminho_transcricao}", flush=True)
+            transcricao_salva = _carregar_transcricao_srt(caminho_transcricao)
+            # Considera uma transcrição vazia como inválida
+            # (normalmente causada por uma execução interrompida).
+            # Deleta e refaz a transcrição nesse caso.
+            if not transcricao_salva["segmentos"] or transcricao_salva["duracao"] <= 0.0:
+                print(f"[Transcrição] A transcrição existente está vazia ou inválida. Removendo arquivo.", flush=True)
+                caminho_transcricao.unlink(missing_ok=True)
             else:
-                print(
-                    f"[transcribe/local] {len(cached['segments'])} cached segments, "
-                    f"{cached['duration']:.0f}s of audio",
-                    flush=True,
-                )
-                return cached
+                print(f"[Transcrição] {len(transcricao_salva['segmentos'])} segmentos encontrados ({transcricao_salva['duracao']:.0f}s).", flush=True)
+                return transcricao_salva
 
     try:
         from faster_whisper import WhisperModel  # type: ignore
     except ImportError as e:
         raise RuntimeError(
-            "faster-whisper is required for --mode local. Install it with:\n"
-            "    pip install -r requirements-local.txt"
+            "A biblioteca faster-whisper é necessária para realizar a transcrição.\n"
+            "Instale-a com:\n"
+            "    pip install -r requirements.txt"
         ) from e
 
-    device = _resolve_device()
-    compute_type = "float16" if device == "cuda" else "int8"
-    print(f"[transcribe/local] faster-whisper model={LOCAL_WHISPER_MODEL} device={device}", flush=True)
+    dispositivo = _obter_dispositivo_whisper()
+    tipo_computacao = "float16" if dispositivo == "cuda" else "int8"
+    print(f"[Transcrição] Modelo: {MODELO_WHISPER} | Dispositivo: {dispositivo}", flush=True)
 
-    from ..config import LOCAL_WHISPER_VAD_FILTER, LOCAL_WHISPER_VAD_PARAMETERS
+    # from ..config import LOCAL_WHISPER_VAD_FILTER, LOCAL_WHISPER_VAD_PARAMETERS
+    FILTRO_WHISPER_VAD = False      #provisório
+    PARAMETROS_WHISPER_VAD = {      #provisório
+        "threshold": 0.5,
+        "min_speech_duration_ms": 250,
+        "max_speech_duration_s": float("inf"),
+        "min_silence_duration_ms": 2000,
+        "speech_pad_ms": 400,
+    }
 
-    model = WhisperModel(LOCAL_WHISPER_MODEL, device=device, compute_type=compute_type)
 
-    transcribe_kwargs = {
-        "audio": media_path,
-        "language": language,
+    modelo = WhisperModel(MODELO_WHISPER, device=dispositivo, compute_type=tipo_computacao)
+
+    parametros_transcricao = {
+        "audio": caminho_midia,
+        "language": idioma,
         "beam_size": 5,
         "condition_on_previous_text": False,
     }
-    if LOCAL_WHISPER_VAD_FILTER:
-        transcribe_kwargs["vad_filter"] = True
-        transcribe_kwargs["vad_parameters"] = LOCAL_WHISPER_VAD_PARAMETERS
+    if FILTRO_WHISPER_VAD:
+        parametros_transcricao["vad_filter"] = True
+        parametros_transcricao["vad_parameters"] = PARAMETROS_WHISPER_VAD
     else:
-        transcribe_kwargs["vad_filter"] = False
+        parametros_transcricao["vad_filter"] = False
 
-    segments_iter, info = model.transcribe(**transcribe_kwargs)
+    iterador_segmentos, informacoes = modelo.transcribe(**parametros_transcricao)
 
-    segments = []
-    for s in segments_iter:
-        segments.append({
-            "start": float(s.start),
-            "end": float(s.end),
-            "text": (s.text or "").strip(),
+    segmentos = []
+    for segmento in iterador_segmentos:
+        segmentos.append({
+            "inicio": float(segmento.start),
+            "fim": float(segmento.end),
+            "texto": (segmento.text or "").strip(),
         })
 
-    duration = float(getattr(info, "duration", 0.0)) or (segments[-1]["end"] if segments else 0.0)
-    print(f"[transcribe/local] {len(segments)} segments, {duration:.0f}s of audio", flush=True)
-    transcript = {"duration": duration, "segments": segments}
-    cache_path = _write_srt_cache(media_path, transcript)
-    print(f"[transcribe/local] wrote cache: {cache_path}", flush=True)
-    return transcript
+    duracao = float(getattr(informacoes, "duration", 0.0)) or (segmentos[-1]["fim"] if segmentos else 0.0)
+    print(f"[Transcrição] {len(segmentos)} segmentos gerados, {duracao:.0f}s de áudio", flush=True)
+    transcricao = {"duracao": duracao, "segmentos": segmentos}
+    caminho_transcricao = _salvar_transcricao_srt(caminho_midia, transcricao)
+    print(f"[Transcrição] Transcrição salva em: {caminho_transcricao}", flush=True)
+    return transcricao

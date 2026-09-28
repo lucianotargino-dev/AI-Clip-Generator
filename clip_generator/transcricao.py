@@ -7,6 +7,8 @@ gerador de cortes:
 
 import os
 import re
+import cv2
+from tqdm import tqdm
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -102,44 +104,55 @@ def _obter_dispositivo_whisper() -> str:
     return "cpu"
 
 
-def transcrever(caminho_midia: str, idioma: Optional[str] = None) -> Dict:
+def _extrair_duracao_video(arquivo_video):
+    """Extrai a duração de um arquivo de vídeo usando OpenCV."""
+    video = cv2.VideoCapture(arquivo_video)
+    
+    frames = video.get(cv2.CAP_PROP_FRAME_COUNT)
+    fps = video.get(cv2.CAP_PROP_FPS)
+    
+    duracao = frames / float(fps) if fps > 0 else 0
+    video.release()
+    return duracao
+
+
+def transcrever(caminho_video: str, idioma: Optional[str] = None) -> Dict:
     """Transcreve uma mídia e reutiliza uma transcrição SRT existente quando possível."""
-    caminho_transcricao = _obter_caminho_para_transcricao(caminho_midia)
+    caminho_transcricao = _obter_caminho_para_transcricao(caminho_video)
     if caminho_transcricao.exists():
-        data_modificacao_midia = os.path.getmtime(caminho_midia)
+        data_modificacao_video = os.path.getmtime(caminho_video)
         data_modificacao_transcricao = caminho_transcricao.stat().st_mtime
-        if data_modificacao_transcricao >= data_modificacao_midia:
+        if data_modificacao_transcricao >= data_modificacao_video:
             print(f"[Transcrição] Reutilizando transcrição existente: {caminho_transcricao}", flush=True)
             transcricao_salva = _carregar_transcricao_srt(caminho_transcricao)
             # Considera uma transcrição vazia como inválida
             # (normalmente causada por uma execução interrompida).
             # Deleta e refaz a transcrição nesse caso.
             if not transcricao_salva["segmentos"] or transcricao_salva["duracao"] <= 0.0:
-                print(f"[Transcrição] A transcrição existente está vazia ou inválida. Removendo arquivo.", flush=True)
+                print(f"[Transcrição] A transcrição existente está vazia ou inválida. Removendo arquivo: {caminho_transcricao}", flush=True)
                 caminho_transcricao.unlink(missing_ok=True)
             else:
-                print(f"[Transcrição] {len(transcricao_salva['segmentos'])} segmentos encontrados ({transcricao_salva['duracao']:.0f}s).", flush=True)
+                print(f"[Transcrição] {len(transcricao_salva['segmentos'])} segmentos encontrados, {transcricao_salva['duracao']:.0f} segundos de áudio.", flush=True)
                 return transcricao_salva
 
     try:
         from faster_whisper import WhisperModel  # type: ignore
     except ImportError as e:
         raise RuntimeError(
-            "A biblioteca faster-whisper é necessária para realizar a transcrição.\n"
-            "Instale-a com:\n"
+            "A biblioteca faster-whisper é necessária para realizar a transcrição. Instale-a com:\n"
             "    pip install -r requirements.txt"
         ) from e
 
-    dispositivo = _obter_dispositivo_whisper()
-    tipo_computacao = "float16" if dispositivo == "cuda" else "int8"
-    print(f"[Transcrição] Modelo: {MODELO_WHISPER} | Dispositivo: {dispositivo}", flush=True)
+    dispositivo_whisper = _obter_dispositivo_whisper()
+    tipo_computacao = "float16" if dispositivo_whisper == "cuda" else "int8"
+    print(f"[Transcrição] Faster Whisper | Modelo: {MODELO_WHISPER} | Dispositivo: {dispositivo_whisper}", flush=True)
 
     from .configuracao import FILTRO_WHISPER_VAD, PARAMETROS_WHISPER_VAD
 
-    modelo = WhisperModel(MODELO_WHISPER, device=dispositivo, compute_type=tipo_computacao)
+    modelo_transcricao = WhisperModel(MODELO_WHISPER, device=dispositivo_whisper, compute_type=tipo_computacao)
 
     parametros_transcricao = {
-        "audio": caminho_midia,
+        "audio": caminho_video,
         "language": idioma,
         "beam_size": 5,
         "condition_on_previous_text": False,
@@ -150,19 +163,24 @@ def transcrever(caminho_midia: str, idioma: Optional[str] = None) -> Dict:
     else:
         parametros_transcricao["vad_filter"] = False
 
-    iterador_segmentos, informacoes = modelo.transcribe(**parametros_transcricao)
+    iterador_segmentos, informacoes = modelo_transcricao.transcribe(**parametros_transcricao)
 
     segmentos = []
+    duracao_video = _extrair_duracao_video(caminho_video)
+    barra_progresso = tqdm(total=duracao_video, unit="s", desc="Transcrevendo")
     for segmento in iterador_segmentos:
         segmentos.append({
             "inicio": float(segmento.start),
             "fim": float(segmento.end),
             "texto": (segmento.text or "").strip(),
         })
-
+        novo_valor = min(segmento.end, duracao_video)
+        progresso = novo_valor - barra_progresso.n
+        barra_progresso.update(progresso)
+    barra_progresso.close()
     duracao = float(getattr(informacoes, "duration", 0.0)) or (segmentos[-1]["fim"] if segmentos else 0.0)
-    print(f"[Transcrição] {len(segmentos)} segmentos gerados, {duracao:.0f}s de áudio", flush=True)
+    print(f"[Transcrição] {len(segmentos)} segmentos gerados, {duracao:.0f} segundos de áudio", flush=True)
     transcricao = {"duracao": duracao, "segmentos": segmentos}
-    caminho_transcricao = _salvar_transcricao_srt(caminho_midia, transcricao)
+    caminho_transcricao = _salvar_transcricao_srt(caminho_video, transcricao)
     print(f"[Transcrição] Transcrição salva em: {caminho_transcricao}", flush=True)
     return transcricao

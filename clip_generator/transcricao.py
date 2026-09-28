@@ -17,7 +17,7 @@ from .configuracao import DIRETORIO_SAIDA, DISPOSITIVO_WHISPER, MODELO_WHISPER
 
 def _obter_caminho_para_transcricao(caminho_midia: str) -> Path:
     """Retorna o caminho onde será salvo o arquivo de transcrição (.srt) da mídia."""
-    diretorio_saida = Path(DIRETORIO_SAIDA)
+    diretorio_saida =  Path(os.path.dirname(caminho_midia)) or Path(DIRETORIO_SAIDA)
     diretorio_saida.mkdir(parents=True, exist_ok=True)
     return diretorio_saida / (Path(caminho_midia).stem + ".srt")
 

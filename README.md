@@ -33,11 +33,11 @@ Neste primeiro momento, o repositório contém apenas os arquivos de configuraç
 AI-Clip-Generator/
 │
 ├── clip_generator/
-│   ├── download.py          # Módulo de download de vídeos
-│   └── configuracao.py     # Módulo de configuração que contém as constantes do projeto
+│   ├── configuracao.py     # Módulo de configuração que contém as constantes do projeto
+│   └── download.py         # Módulo de download de vídeos
 │
-├── .gitignore               # Regra de ignorados do Git (herdado do projeto base)
-├── README.md                # Esta documentação
+├── .gitignore              # Regra de ignorados do Git (herdado do projeto base)
+├── README.md               # Esta documentação
 └── LICENCE
 ```
 
@@ -47,7 +47,7 @@ AI-Clip-Generator/
 
 O código-fonte será adicionado e refatorado gradativamente. O pipeline que será construído inclui:
 
-[ ] Módulo de Download: Obtenção de vídeos e organização em diretórios padronizados.
+[X] Módulo de Download: Obtenção de vídeos e organização em diretórios padronizados.
 
 [ ] Módulo de Transcrição: Processamento local de áudio utilizando faster-whisper.
 

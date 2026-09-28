@@ -1,8 +1,33 @@
+# Ambientes Virtuais e Variáveis de Ambiente
 .env
-__pycache__/
-*.pyc
 .venv/
 venv/
-output/
+
+# Cache do Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Pasta de saída de projetos e downloads
+saida/
+
+# Arquivos de vídeo gerados ou locais
 *.mp4
+*.mkv
+*.webm
+
+# Arquivos temporários de download (yt-dlp)
+*.part
+*.ytdl
+
+# Links para o vídeo original criados pelo sistema
+*.url
+*.desktop
+*.webloc
+
+# Arquivos do Sistema Operacional e IDEs
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -34,10 +34,12 @@ AI-Clip-Generator/
 │
 ├── clip_generator/
 │   ├── configuracao.py     # Módulo de configuração que contém as constantes do projeto
-│   └── download.py         # Módulo de download de vídeos
+│   ├── download.py         # Módulo de download de vídeos
+│   └── transcricao.py      # Módulo de transcrição de videos
 │
 ├── .gitignore              # Regra de ignorados do Git (herdado do projeto base)
 ├── README.md               # Esta documentação
+├── requirements.txt
 └── LICENCE
 ```
 

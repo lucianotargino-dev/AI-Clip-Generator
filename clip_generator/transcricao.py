@@ -8,6 +8,7 @@ gerador de cortes:
 import os
 import re
 import cv2
+import json
 from tqdm import tqdm
 from pathlib import Path
 from typing import Dict, Optional
@@ -16,77 +17,22 @@ from .configuracao import DIRETORIO_SAIDA, DISPOSITIVO_WHISPER, MODELO_WHISPER
 
 
 def _obter_caminho_para_transcricao(caminho_midia: str) -> Path:
-    """Retorna o caminho onde será salvo o arquivo de transcrição (.srt) da mídia."""
-    diretorio_saida =  Path(os.path.dirname(caminho_midia)) or Path(DIRETORIO_SAIDA)
+    """Retorna o caminho onde será salvo o arquivo JSON da transcrição."""
+    diretorio_saida = Path(os.path.dirname(caminho_midia)) or Path(DIRETORIO_SAIDA)
     diretorio_saida.mkdir(parents=True, exist_ok=True)
-    return diretorio_saida / (Path(caminho_midia).stem + ".srt")
+    return diretorio_saida / (Path(caminho_midia).stem + ".json")
 
 
-def _converter_segundos_em_timestamp_srt(segundos: float) -> str:
-    """Converte segundos para timestamp SRT."""
-    total_milissegundos = max(0, int(round(segundos * 1000)))
-    milissegundos = total_milissegundos % 1000
-    total_segundos = total_milissegundos // 1000
-    segundos = total_segundos % 60
-    total_minutos = total_segundos // 60
-    minutos = total_minutos % 60
-    horas = total_minutos // 60
-    return f"{horas:02d}:{minutos:02d}:{segundos:02d},{milissegundos:03d}"
-
-
-def _converter_timestamp_srt_em_segundos(timestamp_srt: str) -> float:
-    """Converte timestamp SRT para segundos."""
-    resultado = re.fullmatch(r"(\d{2}):(\d{2}):(\d{2}),(\d{3})", timestamp_srt.strip())
-    if not resultado:
-        raise ValueError(f"Formato de timestamp SRT inválido: {timestamp_srt!r}")
-    horas, minutos, segundos, milissegundos = map(int, resultado.groups())
-    return horas * 3600 + minutos * 60 + segundos + (milissegundos / 1000.0)
-
-
-def _salvar_transcricao_srt(caminho_video: str, transcricao: Dict) -> Path:
-    """Gera um arquivo de transcrição no formato SRT."""
+def _salvar_transcricao_json(caminho_video: str, transcricao: Dict) -> Path:
+    """Salva a transcrição completa em um arquivo JSON."""
     caminho_transcricao = _obter_caminho_para_transcricao(caminho_video)
-    linhas = []
-    for indice, segmento in enumerate(transcricao.get("segmentos", []), start=1):
-        inicio = _converter_segundos_em_timestamp_srt(float(segmento["inicio"]))
-        fim = _converter_segundos_em_timestamp_srt(float(segmento["fim"]))
-        texto = str(segmento.get("texto", "")).strip().replace("\r", "").replace("\n", " ")
-        linhas.append(str(indice))
-        linhas.append(f"{inicio} --> {fim}")
-        linhas.append(texto)
-        linhas.append("")
-
-    caminho_transcricao.write_text("\n".join(linhas), encoding="utf-8")
+    caminho_transcricao.write_text(json.dumps(transcricao, ensure_ascii=False, indent=4), encoding="utf-8")
     return caminho_transcricao
 
 
-def _carregar_transcricao_srt(caminho_transcricao: Path) -> Dict:
-    """Carrega uma transcrição de um arquivo no formato SRT."""
-    conteudo = caminho_transcricao.read_text(encoding="utf-8-sig").strip()
-    if not conteudo:
-        return {"duracao": 0.0, "segmentos": []}
-
-    segmentos = []
-    for bloco in re.split(r"\n\s*\n", conteudo):
-        linhas = [linha.strip("\ufeff") for linha in bloco.splitlines() if linha.strip()]
-        if not linhas:
-            continue
-        if "-->" not in linhas[0] and len(linhas) > 1 and "-->" in linhas[1]:
-            linhas = linhas[1:]
-        if not linhas or "-->" not in linhas[0]:
-            continue
-        inicio_texto, fim_texto = [parte.strip() for parte in linhas[0].split("-->", 1)]
-        texto = "\n".join(linhas[1:]).strip()
-        segmentos.append(
-            {
-                "inicio": _converter_timestamp_srt_em_segundos(inicio_texto),
-                "fim": _converter_timestamp_srt_em_segundos(fim_texto),
-                "texto": texto,
-            }
-        )
-
-    duracao = segmentos[-1]["fim"] if segmentos else 0.0
-    return {"duracao": duracao, "segmentos": segmentos}
+def _carregar_transcricao_json(caminho_transcricao: Path) -> Dict:
+    """Carrega uma transcrição de um arquivo JSON."""
+    return json.loads(caminho_transcricao.read_text(encoding="utf-8"))
 
 
 def _obter_dispositivo_whisper() -> str:
@@ -117,14 +63,14 @@ def _extrair_duracao_video(arquivo_video):
 
 
 def transcrever(caminho_video: str, idioma: Optional[str] = None) -> Dict:
-    """Transcreve uma mídia e reutiliza uma transcrição SRT existente quando possível."""
+    """Transcreve uma mídia e reutiliza uma transcrição JSON existente quando possível."""
     caminho_transcricao = _obter_caminho_para_transcricao(caminho_video)
     if caminho_transcricao.exists():
         data_modificacao_video = os.path.getmtime(caminho_video)
         data_modificacao_transcricao = caminho_transcricao.stat().st_mtime
         if data_modificacao_transcricao >= data_modificacao_video:
             print(f"[Transcrição] Reutilizando transcrição existente: {caminho_transcricao}", flush=True)
-            transcricao_salva = _carregar_transcricao_srt(caminho_transcricao)
+            transcricao_salva = _carregar_transcricao_json(caminho_transcricao)
             # Considera uma transcrição vazia como inválida
             # (normalmente causada por uma execução interrompida).
             # Deleta e refaz a transcrição nesse caso.
@@ -181,6 +127,6 @@ def transcrever(caminho_video: str, idioma: Optional[str] = None) -> Dict:
     duracao = float(getattr(informacoes, "duration", 0.0)) or (segmentos[-1]["fim"] if segmentos else 0.0)
     print(f"[Transcrição] {len(segmentos)} segmentos gerados, {duracao:.0f} segundos de áudio", flush=True)
     transcricao = {"duracao": duracao, "segmentos": segmentos}
-    caminho_transcricao = _salvar_transcricao_srt(caminho_video, transcricao)
+    caminho_transcricao = _salvar_transcricao_json(caminho_video, transcricao)
     print(f"[Transcrição] Transcrição salva em: {caminho_transcricao}", flush=True)
     return transcricao

@@ -257,7 +257,9 @@ def _obter_download_existente(diretorio_saida: str, video_id: str) -> Optional[s
     return None
 
 
-def download_youtube(video_url: str, resolucao: str = "720", diretorio_saida: Optional[str] = None) -> str:
+
+
+def download_youtube(video_url: str, resolucao: str = "720", diretorio_saida: Optional[str] = None) -> tuple[str, Optional[str]]:
     """Baixa um vídeo do YouTube ou retorna o caminho de um arquivo já existente."""
 
 
@@ -265,7 +267,7 @@ def download_youtube(video_url: str, resolucao: str = "720", diretorio_saida: Op
     arquivo_existente = _resolver_caminho_local(video_url)
     if arquivo_existente:
         print(f"[Download] Utilizando arquivo existente: {arquivo_existente}", flush=True)
-        return arquivo_existente
+        return arquivo_existente, None
 
 
     # 2. Vídeo do YouTube
@@ -352,4 +354,4 @@ def download_youtube(video_url: str, resolucao: str = "720", diretorio_saida: Op
 
     print(f"[Download] Link para o vídeo original salvo em: {caminho_link}", flush=True)
 
-    return caminho_video
+    return caminho_video, video_id

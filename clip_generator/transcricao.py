@@ -102,6 +102,7 @@ def transcrever(caminho_video: str, idioma: Optional[str] = None) -> Dict:
         "language": idioma,
         "beam_size": 5,
         "condition_on_previous_text": False,
+        "word_timestamps": True,
     }
     if FILTRO_WHISPER_VAD:
         parametros_transcricao["vad_filter"] = True
@@ -115,10 +116,19 @@ def transcrever(caminho_video: str, idioma: Optional[str] = None) -> Dict:
     duracao_video = _extrair_duracao_video(caminho_video)
     barra_progresso = tqdm(total=duracao_video, unit="s", desc="Transcrevendo")
     for segmento in iterador_segmentos:
+        palavras = []
+        if segmento.words:
+            for palavra in segmento.words:
+                palavras.append({
+                    "inicio": float(palavra.start),
+                    "fim": float(palavra.end),
+                    "palavra": (palavra.word or "").strip(),
+                })
         segmentos.append({
             "inicio": float(segmento.start),
             "fim": float(segmento.end),
             "texto": (segmento.text or "").strip(),
+            "palavras": palavras,
         })
         novo_valor = min(segmento.end, duracao_video)
         progresso = novo_valor - barra_progresso.n

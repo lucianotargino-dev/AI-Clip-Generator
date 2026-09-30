@@ -6,9 +6,9 @@ gerador de cortes:
 """
 
 import os
-import re
-import cv2
 import json
+import subprocess
+import wave
 from tqdm import tqdm
 from pathlib import Path
 from typing import Dict, Optional
@@ -60,15 +60,43 @@ def _obter_dispositivo_whisper() -> str:
     return "cpu"
 
 
-def _extrair_duracao_video(arquivo_video):
-    """Extrai a duração de um arquivo de vídeo usando OpenCV."""
-    video = cv2.VideoCapture(arquivo_video)
+def _converter_para_wav(arquivo_video: str, video_id: Optional[str]) -> str:
+    caminho = Path(arquivo_video)
+    diretorio_saida = caminho.parent
+
+    if not diretorio_saida or str(diretorio_saida) == ".":
+        diretorio_saida = Path(DIRETORIO_SAIDA)
+
+    if video_id:
+        caminho_audio = diretorio_saida / f"audio_{video_id}.wav"
+    else:
+        caminho_audio = diretorio_saida / "audio.wav"
     
-    frames = video.get(cv2.CAP_PROP_FRAME_COUNT)
-    fps = video.get(cv2.CAP_PROP_FPS)
-    
-    duracao = frames / float(fps) if fps > 0 else 0
-    video.release()
+    comando = [
+        "ffmpeg",
+        "-y",               # sobrescreve arquivo de audio se existir
+        "-i", arquivo_video,
+
+        "-ar", "16000",     # sample rate
+        "-ac", "1",         # mono
+        "-loglevel", "error",
+        "-hide_banner",
+        "-stats",
+
+        caminho_audio
+    ]
+
+    subprocess.run(comando)
+
+    return str(caminho_audio)
+
+
+def _extrair_duracao_audio(arquivo_audio:str) -> float:
+    with wave.open(arquivo_audio, "r") as wav:
+        frames = wav.getnframes()
+        rate = wav.getframerate()
+        duracao = frames / float(rate)
+
     return duracao
 
 
@@ -107,13 +135,20 @@ def transcrever(caminho_video: str, idioma: Optional[str] = None, video_id: Opti
 
     modelo_transcricao = WhisperModel(MODELO_WHISPER, device=dispositivo_whisper, compute_type=tipo_computacao)
 
+    caminho_audio = _converter_para_wav(caminho_video, video_id)
+    if not os.path.exists(caminho_audio):
+        raise RuntimeError("[Trancrição] Erro ao extrair audio do video")
+    else:
+        print(f"[Transcrição] Áudio extraído com sucesso: {caminho_audio}", flush=True)
+
     parametros_transcricao = {
-        "audio": caminho_video,
+        "audio": caminho_audio,
         "language": idioma,
         "beam_size": 5,
         "condition_on_previous_text": False,
         "word_timestamps": True,
     }
+
     if FILTRO_WHISPER_VAD:
         parametros_transcricao["vad_filter"] = True
         parametros_transcricao["vad_parameters"] = PARAMETROS_WHISPER_VAD
@@ -124,9 +159,9 @@ def transcrever(caminho_video: str, idioma: Optional[str] = None, video_id: Opti
 
     segmentos = []
 
-    duracao_video = _extrair_duracao_video(caminho_video)
+    duracao_audio = _extrair_duracao_audio(caminho_audio)
 
-    barra_progresso = tqdm(total=duracao_video, unit="s", desc="Transcrevendo")
+    barra_progresso = tqdm(total=duracao_audio, unit="s", desc="Transcrevendo")
 
     for segmento in iterador_segmentos:
 
@@ -147,7 +182,7 @@ def transcrever(caminho_video: str, idioma: Optional[str] = None, video_id: Opti
             "palavras": palavras,
         })
 
-        novo_valor = min(segmento.end, duracao_video)
+        novo_valor = min(segmento.end, duracao_audio)
         progresso = novo_valor - barra_progresso.n
         barra_progresso.update(progresso)
 

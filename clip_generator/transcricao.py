@@ -16,16 +16,26 @@ from typing import Dict, Optional
 from .configuracao import DIRETORIO_SAIDA, DISPOSITIVO_WHISPER, MODELO_WHISPER
 
 
-def _obter_caminho_para_transcricao(caminho_midia: str) -> Path:
+def _obter_caminho_para_transcricao(caminho_midia: str, video_id: Optional[str] = None) -> Path:
     """Retorna o caminho onde será salvo o arquivo JSON da transcrição."""
-    diretorio_saida = Path(os.path.dirname(caminho_midia)) or Path(DIRETORIO_SAIDA)
-    diretorio_saida.mkdir(parents=True, exist_ok=True)
-    return diretorio_saida / (Path(caminho_midia).stem + ".json")
+
+    caminho = Path(caminho_midia)
+    diretorio_saida = caminho.parent
+
+    if not diretorio_saida or str(diretorio_saida) == ".":
+        diretorio_saida = Path(DIRETORIO_SAIDA)
+
+    # diretorio_saida.mkdir(parents=True, exist_ok=True)
+
+    if video_id:
+        return diretorio_saida / f"transcricao_{video_id}.json"
+
+    return diretorio_saida / "transcricao.json"
 
 
-def _salvar_transcricao_json(caminho_video: str, transcricao: Dict) -> Path:
+def _salvar_transcricao_json(caminho_video: str, transcricao: Dict, video_id: Optional[str] = None) -> Path:
     """Salva a transcrição completa em um arquivo JSON."""
-    caminho_transcricao = _obter_caminho_para_transcricao(caminho_video)
+    caminho_transcricao = _obter_caminho_para_transcricao(caminho_video, video_id)
     caminho_transcricao.write_text(json.dumps(transcricao, ensure_ascii=False, indent=4), encoding="utf-8")
     return caminho_transcricao
 
@@ -62,9 +72,9 @@ def _extrair_duracao_video(arquivo_video):
     return duracao
 
 
-def transcrever(caminho_video: str, idioma: Optional[str] = None) -> Dict:
+def transcrever(caminho_video: str, idioma: Optional[str] = None, video_id: Optional[str] = None) -> Dict:
     """Transcreve uma mídia e reutiliza uma transcrição JSON existente quando possível."""
-    caminho_transcricao = _obter_caminho_para_transcricao(caminho_video)
+    caminho_transcricao = _obter_caminho_para_transcricao(caminho_video, video_id)
     if caminho_transcricao.exists():
         data_modificacao_video = os.path.getmtime(caminho_video)
         data_modificacao_transcricao = caminho_transcricao.stat().st_mtime
@@ -113,10 +123,15 @@ def transcrever(caminho_video: str, idioma: Optional[str] = None) -> Dict:
     iterador_segmentos, informacoes = modelo_transcricao.transcribe(**parametros_transcricao)
 
     segmentos = []
+
     duracao_video = _extrair_duracao_video(caminho_video)
+
     barra_progresso = tqdm(total=duracao_video, unit="s", desc="Transcrevendo")
+
     for segmento in iterador_segmentos:
+
         palavras = []
+
         if segmento.words:
             for palavra in segmento.words:
                 palavras.append({
@@ -124,19 +139,23 @@ def transcrever(caminho_video: str, idioma: Optional[str] = None) -> Dict:
                     "fim": float(palavra.end),
                     "palavra": (palavra.word or "").strip(),
                 })
+
         segmentos.append({
             "inicio": float(segmento.start),
             "fim": float(segmento.end),
             "texto": (segmento.text or "").strip(),
             "palavras": palavras,
         })
+
         novo_valor = min(segmento.end, duracao_video)
         progresso = novo_valor - barra_progresso.n
         barra_progresso.update(progresso)
+
     barra_progresso.close()
+
     duracao = float(getattr(informacoes, "duration", 0.0)) or (segmentos[-1]["fim"] if segmentos else 0.0)
     print(f"[Transcrição] {len(segmentos)} segmentos gerados, {duracao:.0f} segundos de áudio", flush=True)
     transcricao = {"duracao": duracao, "segmentos": segmentos}
-    caminho_transcricao = _salvar_transcricao_json(caminho_video, transcricao)
+    caminho_transcricao = _salvar_transcricao_json(caminho_video, transcricao, video_id)
     print(f"[Transcrição] Transcrição salva em: {caminho_transcricao}", flush=True)
     return transcricao

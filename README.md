@@ -51,7 +51,7 @@ O código-fonte será adicionado e refatorado gradativamente. O pipeline que ser
 
 [X] Módulo de Download: Obtenção de vídeos e organização em diretórios padronizados.
 
-[ ] Módulo de Transcrição: Processamento local de áudio utilizando faster-whisper.
+[X] Módulo de Transcrição: Processamento local de áudio utilizando faster-whisper.
 
 [ ] Módulo de Destaques: Filtro inteligente de momentos virais por LLM para identificar trechos com potencial viral.
 

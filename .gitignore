@@ -16,10 +16,14 @@ saida/
 *.mp4
 *.mkv
 *.webm
+*.wav
 
 # Arquivos temporários de download (yt-dlp)
 *.part
 *.ytdl
+
+# Transcrições e dados temporários/gerados
+*transcricao*.json
 
 # Links para o vídeo original criados pelo sistema
 *.url

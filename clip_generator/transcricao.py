@@ -2,7 +2,7 @@
 
 Lê um arquivo de mídia local e retorna os dados no formato esperado pelo
 gerador de cortes:
-{duracao, segmentos[inicio, fim, texto]}.
+{duracao, segmentos[{inicio, fim, texto, palavras[{inicio, fim, palavra}]}]}.
 """
 
 import os

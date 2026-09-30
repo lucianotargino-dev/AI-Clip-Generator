@@ -40,7 +40,7 @@ AI-Clip-Generator/
 ├── .gitignore              # Regra de ignorados do Git (herdado do projeto base)
 ├── README.md               # Esta documentação
 ├── requirements.txt
-└── LICENCE
+└── LICENSE
 ```
 
 ---
@@ -60,6 +60,98 @@ O código-fonte será adicionado e refatorado gradativamente. O pipeline que ser
 [ ] Módulo de Edição: Extração de trechos e reenquadramento dinâmico com base nos carimbos de tempo.
 
 [ ] Módulo de Legendas: Geração e sobreposição de legendas animadas sincronizadas palavra por palavra.
+
+---
+
+## ⚠️ Importante
+
+### 1. FFmpeg
+
+O módulo de transcrição requer o **FFmpeg** instalado no sistema.
+
+**No Windows (via Terminal/PowerShell):**
+
+```powershell
+winget install FFmpeg
+```
+
+**No Linux (Ubuntu/Debian):**
+
+```powershell
+sudo apt update && sudo apt install ffmpeg -y
+```
+
+**No macOS:**
+
+```powershell
+brew install ffmpeg
+```
+
+Nota: Após a instalação, feche e reabra o terminal/IDE para atualizar as variáveis de ambiente.
+
+### 2. GPU
+
+O módulo identifica e configura dinamicamente o dispositivo de execução (GPU vs. CPU):
+
+- Aceleração por GPU (NVIDIA CUDA):
+  - Requer placa de vídeo NVIDIA com drivers atualizados.
+
+  - Requer as bibliotecas do cuDNN instaladas (especialmente a versão 8 ou superior compatível com **ctranslate2**/**faster-whisper**).
+
+  - No Python, usa precisão **float16** quando em GPU para maior desempenho.
+
+- Fallback Automático para CPU:
+  - Caso não haja suporte à CUDA/cuDNN configurado ou ocorra alguma incompatibilidade de hardware, o sistema altera automaticamente a execução para **cpu** utilizando a computação em **int8** ou **float32**
+
+### 3. Whisper
+
+- No primeiro uso de um modelo específico do Whisper (ex: **small**, **medium**, **large-v3**), a biblioteca **faster-whisper** baixará os pesos do modelo diretamente do Hugging Face.
+
+- A primeira execução requer conexão à internet para o download dos pesos e espaço em disco disponível no diretório padrão do Hugging Face (**~/.cache/huggingface/hub/**).
+
+### 4. Modelo de dados da transcrição
+
+Foi decidido na arquitetura do projeto que o mesmo não utilizará diretamente a estrutura nativa do faster-whisper, mas sim um formato proprietário padronizado em português.
+
+```json
+{
+  "duracao": 120.5,
+  "segmentos": [
+    {
+      "inicio": 0.0,
+      "fim": 4.5,
+      "texto": "Texto do trecho do vídeo...",
+      "palavras": [
+        {
+          "inicio": 0.0,
+          "fim": 1.0,
+          "palavra": "Texto"
+        },
+        {
+          "inicio": 1.0,
+          "fim": 1.5,
+          "palavra": "do"
+        },
+        {
+          "inicio": 1.5,
+          "fim": 2.5,
+          "palavra": "trecho"
+        },
+        {
+          "inicio": 2.5,
+          "fim": 3.0,
+          "palavra": "do"
+        },
+        {
+          "inicio": 3.0,
+          "fim": 4.0,
+          "palavra": "vídeo..."
+        }
+      ]
+    }
+  ]
+}
+```
 
 ---
 

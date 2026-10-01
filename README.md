@@ -54,9 +54,9 @@ O código-fonte será adicionado e refatorado gradativamente. O pipeline que ser
 
 [X] Módulo de Transcrição: Processamento local de áudio utilizando faster-whisper.
 
-[ ] Módulo de Destaques: Filtro inteligente de momentos virais por LLM para identificar trechos com potencial viral.
+[X] Módulo de LLM: Camada de conexão desacoplada com suporte inicial para Gemini e OpenAI (ChatGPT), e preparação para modelos locais (Ollama).
 
-[ ] Módulo de LLM: Camada de conexão desacoplada com suporte inicial para Gemini e OpenAI (ChatGPT), e preparação para modelos locais (Ollama).
+[ ] Módulo de Destaques: Filtro inteligente de momentos virais por LLM para identificar trechos com potencial viral.
 
 [ ] Módulo de Edição: Extração de trechos e reenquadramento dinâmico com base nos carimbos de tempo.
 

@@ -1,4 +1,11 @@
+# Módulo de download
 yt-dlp
+
+# Módulo de transcrição
 faster-whisper
 tqdm
 torch
+
+# Módulo de LLM
+openai
+google-genai

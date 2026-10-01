@@ -38,6 +38,7 @@ AI-Clip-Generator/
 │   ├── llm.py              # Módulo de conexão com LLMs
 │   └── transcricao.py      # Módulo de transcrição de videos
 │
+├── .env.example
 ├── .gitignore              # Regra de ignorados do Git (herdado do projeto base)
 ├── README.md               # Esta documentação
 ├── requirements.txt

@@ -34,6 +34,7 @@ AI-Clip-Generator/
 │
 ├── clip_generator/
 │   ├── configuracao.py     # Módulo de configuração que contém as constantes do projeto
+│   ├── destaques.py        # Módulo de escolha de momentos virais
 │   ├── download.py         # Módulo de download de vídeos
 │   ├── llm.py              # Módulo de conexão com LLMs
 │   └── transcricao.py      # Módulo de transcrição de videos

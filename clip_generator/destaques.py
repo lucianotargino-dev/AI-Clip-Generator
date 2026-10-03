@@ -184,8 +184,8 @@ def _gerar_destaques_com_llm(
     informacoes_conteudo: Dict,
     duracao: float,
     quantidade_clipes: int,
-    eh_bloco: bool = False,
-    funcao_llm: FuncaoLLM = None,
+    funcao_llm: FuncaoLLM,
+    eh_bloco: bool = False    
 ) -> Dict:
     
     alvo = max(quantidade_clipes * 2, 5)
@@ -221,10 +221,8 @@ def _gerar_destaques_com_llm(
             )
             prompt = (
                 prompt_base
-                + "\n\nIMPORTANTE: Retorne SOMENTE um JSON válido com uma "
-                "matriz 'destaques' no nível superior."
-                + " Cada item deve conter: titulo, inicio, fim, pontuacao, "
-                "frase_gancho, motivo_viralizacao."
+                + "\n\nIMPORTANTE: Retorne SOMENTE um JSON válido com uma matriz 'destaques' no nível superior."
+                + " Cada item deve conter: titulo, inicio, fim, pontuacao, frase_gancho, motivo_viralizacao."
                 + " Não utilize blocos Markdown nem comentários."
             )
 
@@ -256,8 +254,8 @@ def _remover_destaques_duplicados(destaques: List[Dict]) -> List[Dict]:
 
 def obter_destaques(
     transcricao: Dict,
-    quantidade_clipes: int = 3,
-    funcao_llm: FuncaoLLM = None,
+    funcao_llm: FuncaoLLM,
+    quantidade_clipes: int = 3
 ) -> Dict:
     """Função principal que retorna os destaques ordenados por pontuação."""
     duracao = transcricao.get("duracao", 0)

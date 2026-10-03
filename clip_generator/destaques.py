@@ -1,306 +1,290 @@
-"""Find the most viral-worthy highlights in a transcript.
+"""Identifica os destaques com maior potencial de viralização em uma transcri
 
-Logic ported from ViralVadoo's transcript_analysis/highlight_generator.py:
-  - content-type / density detection
-  - chunking for long videos with overlap
-  - virality-criteria prompt
-  - score-based dedupe with overlap suppression
+Lógica adaptada do arquivo transcript_analysis/highlight_generator.py do ViralVadoo:
 
-The LLM call is pluggable via the `llm_fn` argument so the same prompts can
-drive either MuAPI (default, --mode api) or a direct local LLM client
-(--mode local).
+* detecção do tipo e da densidade do conteúdo;
+* divisão de vídeos longos em blocos com sobreposição;
+* definição dos critérios de viralização no prompt;
+* remoção de destaques duplicados com base na pontuação e supressão de sobreposição.
+
+A chamada à LLM é intercambiável por meio do argumento  funcao_llm , permitindo 
+utilizar diferentes provedores de LLM sem alterar a lógica de análise dos 
+destaques.
 """
+
 import json
 import re
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Any, Optional
 
-from . import muapi
-
-
-LLMFn = Callable[[str], str]
+FuncaoLLM = Callable[[str], str]
 
 
-CONTENT_TYPE_PROMPT = """Analyze this video transcript sample and classify the content type.
-Choose one: podcast, interview, tutorial, lecture, commentary, debate, vlog, other.
-Also estimate content density: low (mostly filler/chit-chat), medium, or high (dense info/stories).
-Respond with JSON only: {"content_type": "...", "density": "..."}"""
+PROMPT_TIPO_CONTEUDO = """Analise esta amostra da transcrição de um vídeo e classifique o tipo de conteúdo.
+Escolha uma opção: podcast, entrevista, tutorial, aula, comentário, debate, vlog ou outro.
+Estime também a densidade do conteúdo: baixa (principalmente conteúdo superficial/conversa), média ou alta (muitas informações/histórias).
+Responda somente com JSON: {"tipo_conteudo": "...", "densidade": "..."}"""
 
 
-VIRALITY_CRITERIA = """
-Virality signals to prioritize (ranked by impact):
-1. HOOK MOMENTS — statements that create immediate curiosity ("The secret is...", "Nobody talks about...", "I was completely wrong about...")
-2. EMOTIONAL PEAKS — genuine surprise, laughter, anger, vulnerability, excitement; raw unscripted reactions
-3. OPINION BOMBS — strong, polarizing or counter-intuitive statements that trigger agree/disagree
-4. REVELATION MOMENTS — surprising facts, stats, or confessions that reframe how the viewer thinks
-5. CONFLICT/TENSION — disagreement, pushback, or a problem being confronted head-on
-6. QUOTABLE ONE-LINERS — a sentence that works as a standalone quote card
-7. STORY PEAKS — the climax or twist of an anecdote; the payoff moment
-8. PRACTICAL VALUE — a concrete tip, hack, or insight the viewer can immediately apply
+CRITERIOS_VIRALIZACAO = """
+Sinais de potencial de viralização a serem priorizados (em ordem de impacto):
+1. MOMENTOS DE GANCHO — declarações que despertam curiosidade imediata ("O segredo é...", "Ninguém fala sobre...", "Eu estava completamente 
+errado sobre...")
+2. PICOS EMOCIONAIS — surpresa, risada, raiva, vulnerabilidade ou empolgação genuínas; reações espontâneas e não ensaiadas
+3. OPINIÕES IMPACTANTES — declarações fortes, polêmicas ou contraintuitivas que provoquem concordância ou discordância
+4. MOMENTOS DE REVELAÇÃO — fatos, estatísticas ou confissões surpreendentes que mudam a forma como o espectador enxerga o assunto
+5. CONFLITO/TENSÃO — discordância, contestação ou um problema sendo enfrentado diretamente
+6. FRASES DE EFEITO — uma frase que funcione como uma citação independente
+7. PICO DA HISTÓRIA — o clímax ou a reviravolta de uma história; o momento de conclusão ou recompensa
+8. VALOR PRÁTICO — uma dica, técnica ou informação que o espectador possa aplicar imediatamente
 """
 
 
-HIGHLIGHT_SYSTEM_PROMPT = """You are an elite short-form video editor who has studied thousands of viral clips on TikTok, Instagram Reels, and YouTube Shorts. You know exactly what makes viewers stop scrolling, watch to the end, and share.
+PROMPT_SISTEMA_DESTAQUES = """Você é um editor especialista em vídeos curtos que estudou milhares de cortes virais no TikTok, Instagram Reels e YouTube Shorts. Você sabe exatamente o que faz os espectadores pararem de rolar a tela, assistirem até o final e compartilharem um vídeo.
 
-{virality_criteria}
+{criterios_viralizacao}
 
-Content type: {content_type} | Density: {density}
+Tipo de conteúdo: {tipo_conteudo} | Densidade: {densidade}
 
-Your task: identify the most viral-worthy highlights from the transcript.
+Sua tarefa: identificar os destaques da transcrição com maior potencial de viralização.
 
-Rules:
-- Every highlight must open with a strong HOOK — a line that grabs attention within the first 3 seconds
-- Duration sweet spot: 45-90 seconds. Go shorter (20-44s) only for a perfect standalone one-liner. Go longer (91-180s) only when a story arc needs full context to land
-- Never cut mid-sentence or mid-thought — each clip must feel complete and self-contained
-- Clips must not overlap significantly with each other
-- Score 0-100 on viral potential (not general quality)
-- {num_clips_instruction}
-- For each highlight, identify the single best "hook_sentence" — the opening line that would make someone stop scrolling
-- Explain in one sentence why this clip is viral ("virality_reason")
+Regras:
 
-Respond ONLY with valid JSON (no markdown, no explanation):
-{{"highlights":[{{"title":"string","start_time":float,"end_time":float,"score":int,"hook_sentence":"string","virality_reason":"string"}}]}}"""
+- Todo destaque deve começar com um GANCHO forte — uma frase que capture a atenção nos primeiros 3 segundos
+- Duração ideal: 45–90 segundos. Seja mais curto (20–44s) somente para uma frase de efeito perfeita e independente. Seja mais longo (91–180s) somente quando uma história precisar de todo o contexto para funcionar
+- Nunca corte no meio de uma frase ou raciocínio — cada corte deve ser completo e fazer sentido por si só
+- Os cortes não devem apresentar sobreposição significativa entre si
+- Atribua uma pontuação de 0–100 para o potencial de viralização (não para a qualidade geral)
+- {instrucao_quantidade_clipes}
+- Para cada destaque, identifique a melhor "frase_gancho" — a frase inicial que faria alguém parar de rolar a tela
+- Explique em uma frase por que este corte tem potencial de viralização ("motivo_viralizacao")
 
-
-CHUNK_SIZE_SECONDS = 1200       # 20-min chunks for long videos
-LONG_VIDEO_THRESHOLD = 1800     # chunk videos longer than 30 min
-CHUNK_OVERLAP_SECONDS = 60
-GPT_CALL_TIMEOUT_SECONDS = 300  # cap LLM polls at 5 min — a wedged call should fail fast
-MAX_HIGHLIGHT_API_ATTEMPTS = 3
+Responda SOMENTE com JSON válido (sem Markdown e sem explicações):
+{{"destaques":[{{"titulo":"string","inicio":float,"fim":float,"pontuacao":int,"frase_gancho":"string","motivo_viralizacao":"string"}}]}}"""
 
 
-def call_muapi_llm(prompt: str) -> str:
-    """Default LLM backend: MuAPI gpt-5-mini."""
-    result = muapi.run(
-        "gpt-5-mini",
-        {"prompt": prompt},
-        label="gpt-5-mini",
-        timeout=GPT_CALL_TIMEOUT_SECONDS,
-    )
+TAMANHO_BLOCO_SEGUNDOS = 1200       # blocos de 20 minutos para vídeos longos
+LIMIAR_VIDEO_LONGO_SEGUNDOS = 1800  # divide vídeos com mais de 30 minutos
+SOBREPOSICAO_BLOCO_SEGUNDOS = 60
 
-    outputs = result.get("outputs")
-    if isinstance(outputs, list) and outputs and isinstance(outputs[0], str) and outputs[0].strip():
-        return outputs[0]
-
-    for key in ("output", "text", "response", "result", "content"):
-        v = result.get(key)
-        if isinstance(v, str) and v.strip():
-            return v
-        if isinstance(v, dict):
-            inner = v.get("text") or v.get("content")
-            if isinstance(inner, str) and inner.strip():
-                return inner
-        if isinstance(v, list) and v and isinstance(v[0], str):
-            return v[0]
-
-    raise RuntimeError(f"Could not extract gpt-5-mini text from response: {result}")
+TEMPO_LIMITE_CHAMADA_LLM_SEGUNDOS = 300  # limita as consultas à LLM a 5 minutos
+MAXIMO_TENTATIVAS_DESTAQUES = 3
 
 
-def _parse_json_loose(raw: str) -> Dict:
-    """gpt-5-4 sometimes wraps JSON in markdown fences — strip and parse."""
-    text = raw.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
+def _interpretar_json_flexivel(texto_bruto: str) -> Dict:
+    """Remove formatação Markdown e interpreta uma resposta JSON."""
+    texto = texto_bruto.strip()
+    texto = re.sub(r"^```(?:json)?\s*", "", texto)
+    texto = re.sub(r"\s*```$", "", texto)
+
     try:
-        return json.loads(text)
+        return json.loads(texto)
     except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1:
-            return json.loads(text[start:end + 1])
+        inicio = texto.find("{")
+        fim = texto.rfind("}")
+
+        if inicio != -1 and fim != -1:
+            return json.loads(texto[inicio:fim + 1])
+
         raise
 
 
-def _coerce_float(value: object, default: float = 0.0) -> float:
+def _converter_para_float(valor: Any, padrao: float = 0.0) -> float:
     try:
-        return float(value)
+        return float(valor)
     except (TypeError, ValueError):
-        return default
+        return padrao
 
 
-def _coerce_int(value: object, default: int = 0) -> int:
+def _converter_para_int(valor: Any, padrao: int = 0) -> int:
     try:
-        return int(float(value))
+        return int(float(valor))
     except (TypeError, ValueError):
-        return default
+        return padrao
 
 
-def _sanitize_highlights(raw_highlights: object, duration: float) -> List[Dict]:
-    """Normalize model output into the expected shape; skip invalid entries."""
-    if not isinstance(raw_highlights, list):
+def _validar_destaques(destaques_brutos: object, duracao: float) -> List[Dict]:
+    """Normaliza a resposta da LLM para o formato esperado e ignora itens inválidos."""
+    if not isinstance(destaques_brutos, list):
         return []
 
-    max_end = duration if duration > 0 else float("inf")
-    cleaned: List[Dict] = []
-    for item in raw_highlights:
+    fim_maximo = duracao if duracao > 0 else float("inf")
+    destaques_limpos: List[Dict] = []
+    for item in destaques_brutos:
         if not isinstance(item, dict):
             continue
 
-        start = _coerce_float(item.get("start_time"), default=-1.0)
-        end = _coerce_float(item.get("end_time"), default=-1.0)
-        if start < 0 or end <= start:
+        inicio = _converter_para_float(item.get("inicio"), padrao=-1.0)
+        fim = _converter_para_float(item.get("fim"), padrao=-1.0)
+        if inicio < 0 or fim <= inicio:
             continue
 
-        if max_end != float("inf"):
-            start = min(start, max_end)
-            end = min(end, max_end)
-            if end <= start:
+        if fim_maximo != float("inf"):
+            inicio = min(inicio, fim_maximo)
+            fim = min(fim, fim_maximo)
+            if fim <= inicio:
                 continue
 
-        cleaned.append(
+        destaques_limpos.append(
             {
-                "title": str(item.get("title") or "Untitled Highlight").strip(),
-                "start_time": start,
-                "end_time": end,
-                "score": max(0, min(100, _coerce_int(item.get("score"), default=0))),
-                "hook_sentence": str(item.get("hook_sentence") or "").strip(),
-                "virality_reason": str(item.get("virality_reason") or "").strip(),
+                "titulo": str(item.get("titulo") or "Destaque sem título").strip(),
+                "inicio": inicio,
+                "fim": fim,
+                "pontuacao": max(0, min(100, _converter_para_int(item.get("pontuacao"), padrao=0))),
+                "frase_gancho": str(item.get("frase_gancho") or "").strip(),
+                "motivo_viralizacao": str(item.get("motivo_viralizacao") or "").strip(),
             }
         )
 
-    return cleaned
+    return destaques_limpos
 
 
-def detect_content_type(transcript: Dict, llm_fn: LLMFn = call_muapi_llm) -> Dict[str, str]:
-    segments = transcript.get("segments", [])
-    sample = " ".join(s["text"] for s in segments[:25])[:3000]
-    prompt = f"{CONTENT_TYPE_PROMPT}\n\nTranscript sample:\n{sample}"
+def _detectar_tipo_conteudo(transcricao: Dict, funcao_llm: FuncaoLLM) -> Dict[str, str]:
+    segmentos = transcricao.get("segmentos", [])
+    amostra = " ".join(segmento["texto"] for segmento in segmentos[:25])[:3000]
+    prompt = f"{PROMPT_TIPO_CONTEUDO}\n\nAmostra de transcrição:\n{amostra}"
     try:
-        raw = llm_fn(prompt)
-        return _parse_json_loose(raw)
+        return _interpretar_json_flexivel(funcao_llm(prompt))
     except Exception:
-        return {"content_type": "other", "density": "medium"}
+        return {"tipo_conteudo": "outro", "densidade": "media"}
 
 
-def build_transcript_text(transcript: Dict) -> str:
-    segments = transcript.get("segments", [])
-    return "\n".join(f"[{s['start']:.1f}s] {s['text'].strip()}" for s in segments)
+def _construir_texto_transcricao(transcricao: Dict) -> str:
+    segmentos = transcricao.get("segmentos", [])
+    return "\n".join(f"[{segmento['inicio']:.1f}s] {segmento['texto'].strip()}" for segmento in segmentos)
 
 
-def chunk_transcript(transcript: Dict) -> List[Dict]:
-    segments = transcript.get("segments", [])
-    duration = transcript.get("duration", segments[-1]["end"] if segments else 0)
-    chunks = []
-    start = 0
-    while start < duration:
-        end = min(start + CHUNK_SIZE_SECONDS, duration)
-        chunk_segs = [
-            s for s in segments
-            if s["start"] >= start and s["end"] <= end + CHUNK_OVERLAP_SECONDS
+def _dividir_transcricao_em_blocos(transcricao: Dict) -> List[Dict]:
+    segmentos = transcricao.get("segmentos", [])
+    duracao = transcricao.get("duracao", segmentos[-1]["fim"] if segmentos else 0)
+    blocos = []
+    inicio = 0
+
+    while inicio < duracao:
+        fim = min(inicio + TAMANHO_BLOCO_SEGUNDOS, duracao)
+
+        segmentos_bloco = [
+            segmento for segmento in segmentos
+            if segmento["inicio"] >= inicio and segmento["fim"] <= fim + SOBREPOSICAO_BLOCO_SEGUNDOS
         ]
-        if chunk_segs:
-            chunk = dict(transcript)
-            chunk["segments"] = chunk_segs
-            chunk["duration"] = end - start
-            chunk["_offset"] = start
-            chunks.append(chunk)
-        start += CHUNK_SIZE_SECONDS - CHUNK_OVERLAP_SECONDS
-    return chunks
+
+        if segmentos_bloco:
+            bloco = dict(transcricao)
+            bloco["segmentos"] = segmentos_bloco
+            bloco["duracao"] = fim - inicio
+            bloco["_deslocamento"] = inicio
+            blocos.append(bloco)
+
+        inicio += TAMANHO_BLOCO_SEGUNDOS - SOBREPOSICAO_BLOCO_SEGUNDOS
+
+    return blocos
 
 
-def call_highlight_api(
-    transcript_text: str,
-    content_info: Dict,
-    duration: float,
-    num_clips: int,
-    is_chunk: bool = False,
-    llm_fn: LLMFn = call_muapi_llm,
+def _gerar_destaques_com_llm(
+    texto_transcricao: str,
+    informacoes_conteudo: Dict,
+    duracao: float,
+    quantidade_clipes: int,
+    eh_bloco: bool = False,
+    funcao_llm: FuncaoLLM = None,
 ) -> Dict:
-    # Ask for ~2× the user's target so dedupe has headroom, but cap so the model
-    # doesn't have to generate a huge JSON payload (which times out gpt-5-mini).
-    target = max(num_clips * 2, 5)
-    natural_max = max(2 if is_chunk else 3, int(duration / 90))
-    min_clips = min(target, natural_max, 8)
-    system = HIGHLIGHT_SYSTEM_PROMPT.format(
-        virality_criteria=VIRALITY_CRITERIA,
-        content_type=content_info.get("content_type", "other"),
-        density=content_info.get("density", "medium"),
-        num_clips_instruction=f"Generate at least {min_clips} highlights",
+    
+    alvo = max(quantidade_clipes * 2, 5)
+    maximo_natural = max(2 if eh_bloco else 3, int(duracao / 90))
+    minimo_clipes = min(alvo, maximo_natural, 8)
+    prompt_sistema = PROMPT_SISTEMA_DESTAQUES.format(
+        criterios_viralizacao=CRITERIOS_VIRALIZACAO,
+        tipo_conteudo=informacoes_conteudo.get("tipo_conteudo", "outro"),
+        densidade=informacoes_conteudo.get("densidade", "media"),
+        instrucao_quantidade_clipes=f"Gere pelo menos {minimo_clipes} destaques",
     )
-    base_prompt = f"{system}\n\nTranscript:\n{transcript_text}"
-    prompt = base_prompt
-    last_error = "unknown"
+    prompt_base = f"{prompt_sistema}\n\nTranscrição:\n{texto_transcricao}"
+    prompt = prompt_base
+    ultimo_erro = "desconhecido"
 
-    for attempt in range(1, MAX_HIGHLIGHT_API_ATTEMPTS + 1):
-        raw = llm_fn(prompt)
+    for tentativa in range(1, MAXIMO_TENTATIVAS_DESTAQUES + 1):
+        resposta_bruta = funcao_llm(prompt)
+
         try:
-            parsed = _parse_json_loose(raw)
-            highlights = _sanitize_highlights(parsed.get("highlights"), duration=duration)
-            if highlights:
-                return {"highlights": highlights}
-            last_error = "no valid highlights in response"
-        except Exception as e:
-            last_error = str(e)
+            resposta_interpretada = _interpretar_json_flexivel(resposta_bruta)
+            destaques = _validar_destaques(resposta_interpretada.get("destaques"), duracao=duracao)
+            if destaques:
+                return {"destaques": destaques}
+            ultimo_erro = "nenhum destaque válido na resposta"
+        except Exception as erro:
+            ultimo_erro = str(erro)
 
-        if attempt < MAX_HIGHLIGHT_API_ATTEMPTS:
+        if tentativa < MAXIMO_TENTATIVAS_DESTAQUES:
             print(
-                f"[highlights] invalid model output on attempt {attempt}/{MAX_HIGHLIGHT_API_ATTEMPTS}; retrying",
+                f"[destaques] resposta inválida na tentativa "
+                f"{tentativa}/{MAXIMO_TENTATIVAS_DESTAQUES}; tentando novamente",
                 flush=True,
             )
             prompt = (
-                base_prompt
-                + "\n\nIMPORTANT: Return ONLY valid JSON with a top-level 'highlights' array."
-                + " Each item must include: title, start_time, end_time, score, hook_sentence, virality_reason."
-                + " No markdown fences, no commentary."
+                prompt_base
+                + "\n\nIMPORTANTE: Retorne SOMENTE um JSON válido com uma "
+                "matriz 'destaques' no nível superior."
+                + " Cada item deve conter: titulo, inicio, fim, pontuacao, "
+                "frase_gancho, motivo_viralizacao."
+                + " Não utilize blocos Markdown nem comentários."
             )
 
     raise RuntimeError(
-        f"Highlight generator produced invalid output after {MAX_HIGHLIGHT_API_ATTEMPTS} attempts: {last_error}"
+        f"O gerador de destaques produziu uma resposta inválida após {MAXIMO_TENTATIVAS_DESTAQUES} tentativas: {ultimo_erro}"
     )
 
 
-def dedupe_highlights(highlights: List[Dict]) -> List[Dict]:
-    """Drop a highlight if it overlaps >50% with a higher-scoring one already kept."""
-    highlights = sorted(highlights, key=lambda x: int(x.get("score", 0)), reverse=True)
-    kept: List[Dict] = []
-    for h in highlights:
-        h_start = float(h["start_time"])
-        h_end = float(h["end_time"])
-        h_dur = h_end - h_start
-        overlapping = False
-        for k in kept:
-            latest_start = max(h_start, float(k["start_time"]))
-            earliest_end = min(h_end, float(k["end_time"]))
-            overlap = earliest_end - latest_start
-            if overlap > 0 and overlap > 0.5 * h_dur:
-                overlapping = True
+def _remover_destaques_duplicados(destaques: List[Dict]) -> List[Dict]:
+    """Remove destaques com mais de 50% de sobreposição com um destaque melhor avaliado."""
+    destaques = sorted(destaques, key=lambda destaque: int(destaque.get("pontuacao", 0)), reverse=True)
+    mantidos: List[Dict] = []
+    for destaque in destaques:
+        inicio_destaque = float(destaque["inicio"])
+        fim_destaque = float(destaque["fim"])
+        duracao_destaque = fim_destaque - inicio_destaque
+        possui_sobreposicao = False
+        for mantido in mantidos:
+            maior_inicio = max(inicio_destaque, float(mantido["inicio"]))
+            menor_fim = min(fim_destaque, float(mantido["fim"]))
+            sobreposicao = menor_fim - maior_inicio
+            if (sobreposicao > 0 and sobreposicao > 0.5 * duracao_destaque):
+                possui_sobreposicao = True
                 break
-        if not overlapping:
-            kept.append(h)
-    return kept
+        if not possui_sobreposicao:
+            mantidos.append(destaque)
+    return mantidos
 
 
-def get_highlights(
-    transcript: Dict,
-    num_clips: int = 3,
-    llm_fn: Optional[LLMFn] = None,
+def obter_destaques(
+    transcricao: Dict,
+    quantidade_clipes: int = 3,
+    funcao_llm: FuncaoLLM = None,
 ) -> Dict:
-    """Main entry point — returns {highlights: [...]} sorted by score.
-
-    `llm_fn` swaps the underlying LLM. Defaults to MuAPI gpt-5-mini; local
-    mode passes in a local LLM-backed callable.
-    """
-    llm_fn = llm_fn or call_muapi_llm
-    duration = transcript.get("duration", 0)
-    content_info = detect_content_type(transcript, llm_fn=llm_fn)
-    print(f"[highlights] content={content_info.get('content_type')} density={content_info.get('density')} duration={duration:.0f}s", flush=True)
-
-    if duration >= LONG_VIDEO_THRESHOLD:
-        chunks = chunk_transcript(transcript)
-        print(f"[highlights] long video — splitting into {len(chunks)} chunks", flush=True)
-        all_highlights: List[Dict] = []
-        for i, chunk in enumerate(chunks):
-            offset = chunk.get("_offset", 0)
-            text = build_transcript_text(chunk)
-            print(f"[highlights] chunk {i + 1}/{len(chunks)} (offset {offset:.0f}s)", flush=True)
-            result = call_highlight_api(text, content_info, chunk["duration"], num_clips=num_clips, is_chunk=True, llm_fn=llm_fn)
-            for h in result.get("highlights", []):
-                h["start_time"] = float(h["start_time"]) + offset
-                h["end_time"] = float(h["end_time"]) + offset
-                all_highlights.append(h)
-        highlights = dedupe_highlights(all_highlights)
+    """Função principal que retorna os destaques ordenados por pontuação."""
+    duracao = transcricao.get("duracao", 0)
+    informacoes_conteudo = _detectar_tipo_conteudo(transcricao, funcao_llm=funcao_llm)
+    print(
+        f"[destaques] conteúdo={informacoes_conteudo.get('tipo_conteudo')} "
+        f"densidade={informacoes_conteudo.get('densidade')} "
+        f"duração={duracao:.0f}s",
+        flush=True,
+    )
+    if duracao >= LIMIAR_VIDEO_LONGO_SEGUNDOS:
+        blocos = _dividir_transcricao_em_blocos(transcricao)
+        print(f"[destaques] vídeo longo — dividido em {len(blocos)} blocos", flush=True)
+        todos_destaques: List[Dict] = []
+        for indice, bloco in enumerate(blocos):
+            deslocamento = bloco.get("_deslocamento", 0)
+            texto = _construir_texto_transcricao(bloco)
+            print(
+                f"[destaques] bloco {indice + 1}/{len(blocos)} (deslocamento {deslocamento:.0f}s)", flush=True)
+            resultado = _gerar_destaques_com_llm(texto, informacoes_conteudo, bloco["duracao"], quantidade_clipes, eh_bloco=True, funcao_llm=funcao_llm)
+            for destaque in resultado.get("destaques", []):
+                destaque["inicio"] = float(destaque["inicio"]) + deslocamento
+                destaque["fim"] = float(destaque["fim"]) + deslocamento
+                todos_destaques.append(destaque)
+        destaques = _remover_destaques_duplicados(todos_destaques)
     else:
-        text = build_transcript_text(transcript)
-        result = call_highlight_api(text, content_info, duration, num_clips=num_clips, llm_fn=llm_fn)
-        highlights = dedupe_highlights(result.get("highlights", []))
-
-    return {"highlights": highlights}
+        texto = _construir_texto_transcricao(transcricao)
+        resultado = _gerar_destaques_com_llm(texto, informacoes_conteudo, duracao, quantidade_clipes, funcao_llm=funcao_llm)
+        destaques = _remover_destaques_duplicados(resultado.get("destaques", []))
+    return {"destaques": destaques}

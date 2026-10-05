@@ -1,4 +1,4 @@
-"""Identifica os destaques com maior potencial de viralização em uma transcri
+"""Identifica os destaques com maior potencial de viralização em uma transcrição.
 
 Lógica adaptada do arquivo transcript_analysis/highlight_generator.py do ViralVadoo:
 
@@ -7,8 +7,8 @@ Lógica adaptada do arquivo transcript_analysis/highlight_generator.py do ViralV
 * definição dos critérios de viralização no prompt;
 * remoção de destaques duplicados com base na pontuação e supressão de sobreposição.
 
-A chamada à LLM é intercambiável por meio do argumento  funcao_llm , permitindo 
-utilizar diferentes provedores de LLM sem alterar a lógica de análise dos 
+A chamada à LLM é intercambiável por meio do argumento 'funcao_llm', permitindo
+utilizar diferentes provedores de LLM sem alterar a lógica de análise dos
 destaques.
 """
 
@@ -125,7 +125,8 @@ def _dividir_transcricao_em_blocos(transcricao: Dict) -> List[Dict]:
 
         segmentos_bloco = [
             segmento for segmento in segmentos
-            if segmento["inicio"] >= inicio and segmento["fim"] <= fim + SOBREPOSICAO_BLOCO_SEGUNDOS
+            if segmento["inicio"] >= inicio
+            and segmento["fim"] <= fim + SOBREPOSICAO_BLOCO_SEGUNDOS
         ]
 
         if segmentos_bloco:
@@ -146,16 +147,16 @@ def _gerar_destaques_com_llm(
     duracao: float,
     quantidade_clipes: int,
     funcao_llm: FuncaoLLM,
-    eh_bloco: bool = False    
+    eh_bloco: bool = False
 ) -> Dict:
-    
+    """Gera destaques usando a LLM com tentativas de recuperação em caso de erro."""
     alvo = max(quantidade_clipes * 2, 5)
     maximo_natural = max(2 if eh_bloco else 3, int(duracao / 90))
     minimo_clipes = min(alvo, maximo_natural, 8)
     prompt_sistema = PROMPT_SISTEMA_DESTAQUES.format(
         criterios_viralizacao=CRITERIOS_VIRALIZACAO,
         tipo_conteudo=informacoes_conteudo.get("tipo_conteudo", "outro"),
-        densidade=informacoes_conteudo.get("densidade", "media"),
+        densidade=informacoes_conteudo.get("densidade", "média"),
         instrucao_quantidade_clipes=f"Gere pelo menos {minimo_clipes} destaques",
     )
     prompt_base = f"{prompt_sistema}\n\nTranscrição:\n{texto_transcricao}"
@@ -175,11 +176,7 @@ def _gerar_destaques_com_llm(
             ultimo_erro = str(erro)
 
         if tentativa < MAXIMO_TENTATIVAS_DESTAQUES:
-            print(
-                f"[destaques] resposta inválida na tentativa "
-                f"{tentativa}/{MAXIMO_TENTATIVAS_DESTAQUES}; tentando novamente",
-                flush=True,
-            )
+            print(f"[Destaques] resposta inválida na tentativa {tentativa}/{MAXIMO_TENTATIVAS_DESTAQUES}; tentando novamente", flush=True)
             prompt = (
                 prompt_base
                 + "\n\nIMPORTANTE: Retorne SOMENTE um JSON válido com uma matriz 'destaques' no nível superior."
@@ -187,9 +184,7 @@ def _gerar_destaques_com_llm(
                 + " Não utilize blocos Markdown nem comentários."
             )
 
-    raise RuntimeError(
-        f"O gerador de destaques produziu uma resposta inválida após {MAXIMO_TENTATIVAS_DESTAQUES} tentativas: {ultimo_erro}"
-    )
+    raise RuntimeError(f"O gerador de destaques produziu uma resposta inválida após {MAXIMO_TENTATIVAS_DESTAQUES} tentativas: {ultimo_erro}")
 
 
 def _remover_destaques_duplicados(destaques: List[Dict]) -> List[Dict]:
@@ -205,7 +200,7 @@ def _remover_destaques_duplicados(destaques: List[Dict]) -> List[Dict]:
             maior_inicio = max(inicio_destaque, float(mantido["inicio"]))
             menor_fim = min(fim_destaque, float(mantido["fim"]))
             sobreposicao = menor_fim - maior_inicio
-            if (sobreposicao > 0 and sobreposicao > 0.5 * duracao_destaque):
+            if sobreposicao > 0 and sobreposicao > 0.5 * duracao_destaque:
                 possui_sobreposicao = True
                 break
         if not possui_sobreposicao:
@@ -221,22 +216,17 @@ def obter_destaques(
     """Função principal que retorna os destaques ordenados por pontuação."""
     duracao = transcricao.get("duracao", 0)
     informacoes_conteudo = _detectar_tipo_conteudo(transcricao, funcao_llm=funcao_llm)
-    print(
-        f"[destaques] conteúdo={informacoes_conteudo.get('tipo_conteudo')} "
-        f"densidade={informacoes_conteudo.get('densidade')} "
-        f"duração={duracao:.0f}s",
-        flush=True,
-    )
+    print(f"[Destaques] conteúdo={informacoes_conteudo.get('tipo_conteudo')} densidade={informacoes_conteudo.get('densidade')} duração={duracao:.0f}s", flush=True)
+
     if duracao >= LIMIAR_VIDEO_LONGO_SEGUNDOS:
         blocos = _dividir_transcricao_em_blocos(transcricao)
-        print(f"[destaques] vídeo longo — dividido em {len(blocos)} blocos", flush=True)
+        print(f"[Destaques] vídeo longo — dividido em {len(blocos)} blocos", flush=True)
         todos_destaques: List[Dict] = []
         for indice, bloco in enumerate(blocos):
             deslocamento = bloco.get("_deslocamento", 0)
             texto = _construir_texto_transcricao(bloco)
-            print(
-                f"[destaques] bloco {indice + 1}/{len(blocos)} (deslocamento {deslocamento:.0f}s)", flush=True)
-            resultado = _gerar_destaques_com_llm(texto, informacoes_conteudo, bloco["duracao"], quantidade_clipes, eh_bloco=True, funcao_llm=funcao_llm)
+            print(f"[Destaques] bloco {indice + 1}/{len(blocos)} (deslocamento {deslocamento:.0f}s)", flush=True)
+            resultado = _gerar_destaques_com_llm(texto, informacoes_conteudo, bloco["duracao"], quantidade_clipes, funcao_llm, eh_bloco=True)
             for destaque in resultado.get("destaques", []):
                 destaque["inicio"] = float(destaque["inicio"]) + deslocamento
                 destaque["fim"] = float(destaque["fim"]) + deslocamento
@@ -244,6 +234,6 @@ def obter_destaques(
         destaques = _remover_destaques_duplicados(todos_destaques)
     else:
         texto = _construir_texto_transcricao(transcricao)
-        resultado = _gerar_destaques_com_llm(texto, informacoes_conteudo, duracao, quantidade_clipes, funcao_llm=funcao_llm)
+        resultado = _gerar_destaques_com_llm(texto, informacoes_conteudo, duracao, quantidade_clipes, funcao_llm)
         destaques = _remover_destaques_duplicados(resultado.get("destaques", []))
     return {"destaques": destaques}

@@ -12,6 +12,7 @@ utilizar diferentes provedores de LLM sem alterar a lógica de análise dos
 destaques.
 """
 
+import os
 import json
 import re
 from pathlib import Path
@@ -252,11 +253,27 @@ def _remover_destaques_duplicados(destaques: List[Dict]) -> List[Dict]:
 
 
 def obter_destaques(
+    caminho_video: str,
     transcricao: Dict,
     funcao_llm: FuncaoLLM,
-    quantidade_clipes: int = 3
+    quantidade_clipes: int = 3,
+    video_id: Optional[str] = None
 ) -> Dict:
     """Função principal que retorna os destaques ordenados por pontuação."""
+    caminho_destaques = _obter_caminho_para_destaques(caminho_video, video_id)
+    if caminho_destaques.exists():
+        data_modificacao_video = os.path.getmtime(caminho_video)
+        data_modificacao_destaques = caminho_destaques.stat().st_mtime
+        if data_modificacao_destaques >= data_modificacao_video:
+            print(f"[Destaques] Reutilizando destaques existentes: {caminho_destaques}", flush=True)
+            destaques_salvo = _carregar_destaques_json(caminho_destaques)
+            if not destaques_salvo["destaques"]:
+                print(f"[Destaques] O arquivo de destaques existente está vazio ou inválido. Removendo arquivo: {caminho_destaques}", flush=True)
+                caminho_destaques.unlink(missing_ok=True)
+            else:
+                print(f"[Destaques] {len(destaques_salvo['destaques'])} destaques encontrados.", flush=True)
+                return destaques_salvo
+
     duracao = transcricao.get("duracao", 0)
     informacoes_conteudo = _detectar_tipo_conteudo(transcricao, funcao_llm=funcao_llm)
     print(f"[Destaques] conteúdo={informacoes_conteudo.get('tipo_conteudo')} densidade={informacoes_conteudo.get('densidade')} duração={duracao:.0f}s", flush=True)
@@ -279,4 +296,8 @@ def obter_destaques(
         texto = _construir_texto_transcricao(transcricao)
         resultado = _gerar_destaques_com_llm(texto, informacoes_conteudo, duracao, quantidade_clipes, funcao_llm)
         destaques = _remover_destaques_duplicados(resultado.get("destaques", []))
+
+    caminho_destaques = _salvar_destaques_json(caminho_video, {"destaques": destaques}, video_id)
+    print(f"[Destaques] Destaques salvo em: {caminho_destaques}", flush=True)
+
     return {"destaques": destaques}

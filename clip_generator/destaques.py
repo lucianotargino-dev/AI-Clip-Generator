@@ -14,9 +14,12 @@ destaques.
 
 import json
 import re
+from pathlib import Path
 from typing import Callable, Dict, List, Any, Optional
 
 from .configuracao import (
+        DIRETORIO_SAIDA,
+
         PROMPT_TIPO_CONTEUDO,
         CRITERIOS_VIRALIZACAO,
         PROMPT_SISTEMA_DESTAQUES,
@@ -29,6 +32,35 @@ from .configuracao import (
         )
 
 FuncaoLLM = Callable[[str], str]
+
+
+def _obter_caminho_para_destaques(caminho_midia: str, video_id: Optional[str] = None) -> Path:
+    """Retorna o caminho onde será salvo o arquivo JSON dos destaques."""
+
+    caminho = Path(caminho_midia)
+    diretorio_saida = caminho.parent
+
+    if not diretorio_saida or str(diretorio_saida) == ".":
+        diretorio_saida = Path(DIRETORIO_SAIDA)
+
+    diretorio_saida.mkdir(parents=True, exist_ok=True)
+
+    if video_id:
+        return diretorio_saida / f"destaques_{video_id}.json"
+
+    return diretorio_saida / "destaques.json"
+
+
+def _salvar_destaques_json(caminho_video: str, destaques: Dict, video_id: Optional[str] = None) -> Path:
+    """Salva a transcrição completa em um arquivo JSON."""
+    caminho_destaques = _obter_caminho_para_destaques(caminho_video, video_id)
+    caminho_destaques.write_text(json.dumps(destaques, ensure_ascii=False, indent=4), encoding="utf-8")
+    return caminho_destaques
+
+
+def _carregar_destaques_json(caminho_destaques: Path) -> Dict:
+    """Carrega uma transcrição de um arquivo JSON."""
+    return json.loads(caminho_destaques.read_text(encoding="utf-8"))
 
 
 def _interpretar_json_flexivel(texto_bruto: str) -> Dict:

@@ -130,8 +130,19 @@ def _dividir_transcricao_em_blocos(transcricao: Dict) -> List[Dict]:
         ]
 
         if segmentos_bloco:
+            segmentos_bloco_relativos = []
+
+            for segmento in segmentos_bloco:
+                segmento_relativo = {
+                    **segmento,
+                    "inicio": segmento["inicio"] - inicio,
+                    "fim": segmento["fim"] - inicio,
+                }
+
+                segmentos_bloco_relativos.append(segmento_relativo)
+
             bloco = dict(transcricao)
-            bloco["segmentos"] = segmentos_bloco
+            bloco["segmentos"] = segmentos_bloco_relativos
             bloco["duracao"] = fim - inicio
             bloco["_deslocamento"] = inicio
             blocos.append(bloco)

@@ -1,5 +1,7 @@
 # Ambientes Virtuais e Variáveis de Ambiente
 .env
+.env.local
+*.env
 .venv/
 venv/
 
@@ -9,7 +11,7 @@ __pycache__/
 *.pyo
 *.pyd
 
-# Pasta de saída de projetos e downloads
+# Pasta de saída de projetos e arquivos temporários de saída
 saida/
 
 # Arquivos de vídeo gerados ou locais
@@ -23,7 +25,7 @@ saida/
 *.ytdl
 
 # Transcrições e dados temporários/gerados
-*transcricao*.json
+*.json
 
 # Links para o vídeo original criados pelo sistema
 *.url

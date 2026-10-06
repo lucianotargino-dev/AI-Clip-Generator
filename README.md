@@ -40,7 +40,7 @@ AI-Clip-Generator/
 │   └── transcricao.py      # Módulo de transcrição de videos
 │
 ├── .env.example
-├── .gitignore              # Regra de ignorados do Git (herdado do projeto base)
+├── .gitignore              # Regra de ignorados do Git
 ├── README.md               # Esta documentação
 ├── requirements.txt
 └── LICENSE

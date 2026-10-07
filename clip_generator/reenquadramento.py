@@ -1,167 +1,148 @@
-"""Local clipping: ffmpeg subclip + OpenCV face-aware vertical crop.
+"""Recorte e processamento dos trechos selecionados para geração de clipes.
 
-Two stages per highlight:
-  1. Cut the source video to [start, end] with ffmpeg (re-encoded, audio kept).
-  2. Reframe the cut to the target aspect ratio. For 9:16 we slide a vertical
-     window horizontally across the frame to keep faces centred (Haar
-     cascade — same approach as the original repo, no external models).
+O módulo recebe o vídeo de origem e os momentos identificados pelo módulo
+de destaques e gera os respectivos arquivos de vídeo.
 """
+
 import os
 import subprocess
 from typing import Dict, List, Optional, Tuple
 
-from ..config import LOCAL_OUTPUT_DIR
+from .configuracao import DIRETORIO_SAIDA
 
 
-def _ratio(aspect_ratio: str) -> float:
-    """Parse '9:16' → 9/16, '1:1' → 1.0."""
+def _calcular_proporcao(proporcao: str) -> float:
+    """Converte uma proporção no formato 'largura:altura' em valor decimal."""
     try:
-        w, h = aspect_ratio.split(":")
-        return float(w) / float(h)
+        largura, altura = proporcao.split(":")
+        return float(largura) / float(altura)
     except (ValueError, ZeroDivisionError):
+        print(f"[Reenquadramento] Proporção inválida: {proporcao!r}. Utilizando a proporção padrão 9:16.")
         return 9.0 / 16.0
 
 
-def _cut_subclip(source_path: str, start: float, end: float, out_path: str) -> str:
-    """ffmpeg -ss start -to end → re-encoded mp4 with audio."""
-    cmd = [
+def _recortar_trecho(caminho_origem: str, inicio: float, fim: float, caminho_saida: str) -> str:
+    """Recorta um trecho do vídeo utilizando FFmpeg."""
+    comando = [
         "ffmpeg", "-y", "-loglevel", "error",
-        "-i", source_path,
-        "-ss", f"{start:.3f}",
-        "-to", f"{end:.3f}",
+        "-i", caminho_origem,
+        "-ss", f"{inicio:.3f}",
+        "-to", f"{fim:.3f}",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-c:a", "aac", "-b:a", "128k",
-        out_path,
+        caminho_saida,
     ]
-    subprocess.run(cmd, check=True)
-    return out_path
+    subprocess.run(comando, check=True)
+    return caminho_saida
 
 
-def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str) -> str:
-    """Crop the cut clip to the target aspect ratio, tracking faces if possible."""
+def _reenquadrar_vertical(caminho_entrada: str, caminho_saida: str, proporcao: str) -> str:
+    """Recorta o vídeo para a proporção desejada, acompanhando rostos quando possível."""
     try:
         import cv2  # type: ignore
     except ImportError as e:
         raise RuntimeError(
-            "opencv-python is required for --mode local. Install it with:\n"
-            "    pip install -r requirements-local.txt"
+            "A biblioteca opencv-python é necessária para o reenquadramento. "
+            "Instale-a com:\n"
+            "    pip install -r requirements.txt"
         ) from e
 
-    target_ratio = _ratio(aspect_ratio)
-    cap = cv2.VideoCapture(in_path)
-    if not cap.isOpened():
-        raise RuntimeError(f"could not open {in_path}")
+    proporcao_alvo = _calcular_proporcao(proporcao)
+    captura = cv2.VideoCapture(caminho_entrada)
+    if not captura.isOpened():
+        raise RuntimeError(f"Não foi possível abrir o vídeo: {caminho_entrada}")
 
-    src_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    largura_origem = int(captura.get(cv2.CAP_PROP_FRAME_WIDTH))
+    altura_origem = int(captura.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = captura.get(cv2.CAP_PROP_FPS) or 30.0
 
-    # Compute the largest crop that fits inside the frame at the target ratio.
-    if target_ratio < src_w / src_h:
-        crop_h = src_h
-        crop_w = int(crop_h * target_ratio)
+    # Calcula o maior recorte possível dentro do quadro na proporção desejada.
+    if proporcao_alvo < largura_origem / altura_origem:
+        altura_recorte = altura_origem
+        largura_recorte = int(altura_recorte * proporcao_alvo)
     else:
-        crop_w = src_w
-        crop_h = int(crop_w / target_ratio)
-    crop_w = max(2, crop_w - (crop_w % 2))
-    crop_h = max(2, crop_h - (crop_h % 2))
+        largura_recorte = largura_origem
+        altura_recorte = int(largura_recorte / proporcao_alvo)
+    largura_recorte = max(2, largura_recorte - (largura_recorte % 2))
+    altura_recorte = max(2, altura_recorte - (altura_recorte % 2))
 
-    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    classificador_rostos = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 
-    silent_path = out_path + ".silent.mp4"
+    caminho_video_sem_audio = caminho_saida + ".silent.mp4"
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(silent_path, fourcc, fps, (crop_w, crop_h))
+    gravador = cv2.VideoWriter(caminho_video_sem_audio, fourcc, fps, (largura_recorte, altura_recorte))
 
-    last_center: Optional[Tuple[int, int]] = None
-    smoothing = 0.15  # how aggressively to chase a new face position
+    ultimo_centro: Optional[Tuple[int, int]] = None
+    suavizacao = 0.15  # Define a velocidade de acompanhamento de uma nova posição facial.
     while True:
-        ret, frame = cap.read()
+        ret, quadro = captura.read()
         if not ret:
             break
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
-        if len(faces) > 0:
-            # Pick the largest face — usually the speaker.
-            x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-            cx = x + w // 2
-            cy = y + h // 2
-            if last_center is None:
-                last_center = (cx, cy)
+        escala_cinza = cv2.cvtColor(quadro, cv2.COLOR_BGR2GRAY)
+        rostos = classificador_rostos.detectMultiScale(escala_cinza, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
+        if len(rostos) > 0:
+            # Seleciona o maior rosto, geralmente correspondente ao falante.
+            x, y, largura, altura = max(rostos, key=lambda rosto: rosto[2] * rosto[3])
+            centro_x = x + largura // 2
+            centro_y = y + altura // 2
+            if ultimo_centro is None:
+                ultimo_centro = (centro_x, centro_y)
             else:
-                lx, ly = last_center
-                last_center = (
-                    int(lx + (cx - lx) * smoothing),
-                    int(ly + (cy - ly) * smoothing),
-                )
-        if last_center is None:
-            last_center = (src_w // 2, src_h // 2)
+                ultimo_x, ultimo_y = ultimo_centro
+                ultimo_centro = (int(ultimo_x + (centro_x - ultimo_x) * suavizacao), int(ultimo_y + (centro_y - ultimo_y) * suavizacao))
+        if ultimo_centro is None:
+            ultimo_centro = (largura_origem // 2, altura_origem // 2)
 
-        cx, cy = last_center
-        x0 = max(0, min(src_w - crop_w, cx - crop_w // 2))
-        y0 = max(0, min(src_h - crop_h, cy - crop_h // 2))
-        cropped = frame[y0:y0 + crop_h, x0:x0 + crop_w]
-        writer.write(cropped)
+        centro_x, centro_y = ultimo_centro
+        inicio_x = max(0, min(largura_origem - largura_recorte, centro_x - largura_recorte // 2))
+        inicio_y = max(0, min(altura_origem - altura_recorte, centro_y - altura_recorte // 2))
+        quadro_recortado = quadro[inicio_y:inicio_y + altura_recorte, inicio_x:inicio_x + largura_recorte]
+        gravador.write(quadro_recortado)
 
-    cap.release()
-    writer.release()
+    captura.release()
+    gravador.release()
 
-    # Mux audio from the cut clip back onto the silent reframed video.
-    cmd = [
+    # Adiciona novamente o áudio do vídeo original ao vídeo reenquadrado.
+    comando = [
         "ffmpeg", "-y", "-loglevel", "error",
-        "-i", silent_path,
-        "-i", in_path,
+        "-i", caminho_video_sem_audio,
+        "-i", caminho_entrada,
         "-c:v", "copy",
         "-c:a", "aac", "-b:a", "128k",
         "-map", "0:v:0", "-map", "1:a:0?",
         "-shortest",
-        out_path,
+        caminho_saida,
     ]
-    subprocess.run(cmd, check=True)
-    os.remove(silent_path)
-    return out_path
+    subprocess.run(comando, check=True)
+    os.remove(caminho_video_sem_audio)
+    return caminho_saida
 
 
-def crop_clip_local(
-    source_path: str,
-    start_time: float,
-    end_time: float,
-    aspect_ratio: str,
-    out_path: str,
-) -> str:
-    """Cut + reframe one highlight, returning the local mp4 path."""
-    cut_path = out_path + ".cut.mp4"
+def _processar_clipe(caminho_arquivo_entrada: str, inicio: float, fim: float, proporcao: str, caminho_arquivo_saida: str) -> str:
+    """Recorta e reenquadra um destaque, retornando o caminho do clipe."""
+    caminho_recorte = caminho_arquivo_saida + ".cut.mp4"
     try:
-        _cut_subclip(source_path, start_time, end_time, cut_path)
-        _reframe_vertical(cut_path, out_path, aspect_ratio)
+        _recortar_trecho(caminho_arquivo_entrada, inicio, fim, caminho_recorte)
+        _reenquadrar_vertical(caminho_recorte, caminho_arquivo_saida, proporcao)
     finally:
-        if os.path.exists(cut_path):
-            os.remove(cut_path)
-    return out_path
+        if os.path.exists(caminho_recorte):
+            os.remove(caminho_recorte)
+    return caminho_arquivo_saida
 
 
-def crop_highlights_local(
-    source_path: str,
-    highlights: List[Dict],
-    aspect_ratio: str = "9:16",
-    out_dir: Optional[str] = None,
-) -> List[Dict]:
-    out_dir = out_dir or LOCAL_OUTPUT_DIR
-    os.makedirs(out_dir, exist_ok=True)
-    results: List[Dict] = []
-    for i, h in enumerate(highlights, 1):
-        out_path = os.path.join(out_dir, f"short_{i:02d}.mp4")
-        print(f"[clip/local] {i}/{len(highlights)}: {h.get('title', '(untitled)')}", flush=True)
+def processar_destaques(caminho_arquivo_entrada: str, destaques: List[Dict], proporcao: str = "9:16", diretorio_saida: Optional[str] = None) -> List[Dict]:
+    """Recorta e reenquadra os destaques, retornando os caminhos dos clipes gerados."""
+    diretorio_saida = diretorio_saida or DIRETORIO_SAIDA
+    os.makedirs(diretorio_saida, exist_ok=True)
+    resultados: List[Dict] = []
+    for indice, destaque in enumerate(destaques, 1):
+        caminho_arquivo_saida = os.path.join(diretorio_saida, f"short_{indice:02d}.mp4")
+        print(f"[clipe] {indice}/{len(destaques)}: {destaque.get('title', '(sem título)')}", flush=True)
         try:
-            crop_clip_local(
-                source_path,
-                float(h["start_time"]),
-                float(h["end_time"]),
-                aspect_ratio,
-                out_path,
-            )
-            results.append({**h, "clip_url": out_path})
+            _processar_clipe(caminho_arquivo_entrada, float(destaque["start_time"]), float(destaque["end_time"]), proporcao, caminho_arquivo_saida)
+            resultados.append({**destaque, "clip_url": caminho_arquivo_saida})
         except Exception as e:
-            print(f"[clip/local] {i} failed: {e}", flush=True)
-            results.append({**h, "clip_url": None, "error": str(e)})
-    return results
+            print(f"[clipe] {indice} falhou: {e}", flush=True)
+            resultados.append({**destaque, "clip_url": None, "error": str(e)})
+    return resultados

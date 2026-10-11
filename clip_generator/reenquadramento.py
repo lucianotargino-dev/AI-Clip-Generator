@@ -6,6 +6,7 @@ de destaques e gera os respectivos arquivos de vídeo.
 
 import os
 import subprocess
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from .configuracao import DIRETORIO_SAIDA
@@ -136,30 +137,33 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
     return caminho_recorte_reenquadrado
 
 
-def _processar_clipe(caminho_arquivo_entrada: str, inicio: float, fim: float, proporcao: str, caminho_arquivo_saida: str) -> str:
-    """Recorta e reenquadra um destaque, retornando o caminho do clipe."""
-    caminho_recorte = caminho_arquivo_saida + ".cut.mp4"
-    try:
-        _recortar_trecho(caminho_arquivo_entrada, inicio, fim)
-        _reenquadrar_vertical(caminho_recorte, caminho_arquivo_saida, proporcao)
-    finally:
-        if os.path.exists(caminho_recorte):
-            os.remove(caminho_recorte)
-    return caminho_arquivo_saida
-
-
-def processar_destaques(caminho_arquivo_entrada: str, destaques: List[Dict], proporcao: str = "9:16", diretorio_saida: Optional[str] = None) -> List[Dict]:
+def processar_destaques(caminho_video: str, destaques: List[Dict], proporcao: str = "9:16", video_id: Optional[str] = None) -> List[Dict]:
     """Recorta e reenquadra os destaques, retornando os caminhos dos clipes gerados."""
-    diretorio_saida = diretorio_saida or DIRETORIO_SAIDA
-    os.makedirs(diretorio_saida, exist_ok=True)
+    caminho = Path(caminho_video)
+    diretorio_saida = caminho.parent
+
+    if not diretorio_saida or str(diretorio_saida) == ".":
+        diretorio_saida = Path(DIRETORIO_SAIDA)
+    
     resultados: List[Dict] = []
+
     for indice, destaque in enumerate(destaques, 1):
-        caminho_arquivo_saida = os.path.join(diretorio_saida, f"corte-{indice:02d}.mp4")
+        if video_id:
+            caminho_salvamento_recorte = os.path.join(diretorio_saida, f"corte-{indice:02d}_{video_id}.mp4")
+        else:
+            caminho_salvamento_recorte = os.path.join(diretorio_saida, f"corte-{indice:02d}.mp4")
         print(f"[clipe] {indice}/{len(destaques)}: {destaque.get('titulo', '(sem título)')}", flush=True)
         try:
-            _processar_clipe(caminho_arquivo_entrada, float(destaque["inicio"]), float(destaque["fim"]), proporcao, caminho_arquivo_saida)
-            resultados.append({**destaque, "clip_url": caminho_arquivo_saida})
+            try:
+                caminho_recorte = _recortar_trecho(caminho_video, float(destaque["inicio"]), float(destaque["fim"]))
+                caminho_recorte_reenquadrado = _reenquadrar_vertical(caminho_recorte, proporcao, caminho_salvamento_recorte)
+            finally:
+                if os.path.exists(caminho_recorte):
+                    os.remove(caminho_recorte)
+
+            resultados.append({**destaque, "clip_url": caminho_recorte_reenquadrado})
         except Exception as e:
             print(f"[clipe] {indice} falhou: {e}", flush=True)
             resultados.append({**destaque, "clip_url": None, "error": str(e)})
+
     return resultados

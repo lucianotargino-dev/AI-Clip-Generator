@@ -30,6 +30,7 @@ def _recortar_trecho(caminho_origem: str, inicio: float, fim: float, caminho_sai
         "-to", f"{fim:.3f}",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-c:a", "aac", "-b:a", "128k",
+        "-hide_banner", "-stats",
         caminho_saida,
     ]
     subprocess.run(comando, check=True)

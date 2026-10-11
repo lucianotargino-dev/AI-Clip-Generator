@@ -21,20 +21,21 @@ def _calcular_proporcao(proporcao: str) -> float:
         return 9.0 / 16.0
 
 
-def _recortar_trecho(caminho_origem: str, inicio: float, fim: float, caminho_saida: str) -> str:
+def _recortar_trecho(caminho_video: str, inicio: float, fim: float) -> str:
     """Recorta um trecho do vídeo utilizando FFmpeg."""
+    caminho_recorte = caminho_video + ".recorte.mp4"
     comando = [
         "ffmpeg", "-y", "-loglevel", "error",
-        "-i", caminho_origem,
+        "-i", caminho_video,
         "-ss", f"{inicio:.3f}",
         "-to", f"{fim:.3f}",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-c:a", "aac", "-b:a", "128k",
         "-hide_banner", "-stats",
-        caminho_saida,
+        caminho_recorte,
     ]
     subprocess.run(comando, check=True)
-    return caminho_saida
+    return caminho_recorte
 
 
 def _reenquadrar_vertical(caminho_entrada: str, caminho_saida: str, proporcao: str) -> str:
@@ -124,7 +125,7 @@ def _processar_clipe(caminho_arquivo_entrada: str, inicio: float, fim: float, pr
     """Recorta e reenquadra um destaque, retornando o caminho do clipe."""
     caminho_recorte = caminho_arquivo_saida + ".cut.mp4"
     try:
-        _recortar_trecho(caminho_arquivo_entrada, inicio, fim, caminho_recorte)
+        _recortar_trecho(caminho_arquivo_entrada, inicio, fim)
         _reenquadrar_vertical(caminho_recorte, caminho_arquivo_saida, proporcao)
     finally:
         if os.path.exists(caminho_recorte):

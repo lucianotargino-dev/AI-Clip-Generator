@@ -154,10 +154,10 @@ def processar_destaques(caminho_arquivo_entrada: str, destaques: List[Dict], pro
     os.makedirs(diretorio_saida, exist_ok=True)
     resultados: List[Dict] = []
     for indice, destaque in enumerate(destaques, 1):
-        caminho_arquivo_saida = os.path.join(diretorio_saida, f"short_{indice:02d}.mp4")
-        print(f"[clipe] {indice}/{len(destaques)}: {destaque.get('title', '(sem título)')}", flush=True)
+        caminho_arquivo_saida = os.path.join(diretorio_saida, f"corte-{indice:02d}.mp4")
+        print(f"[clipe] {indice}/{len(destaques)}: {destaque.get('titulo', '(sem título)')}", flush=True)
         try:
-            _processar_clipe(caminho_arquivo_entrada, float(destaque["start_time"]), float(destaque["end_time"]), proporcao, caminho_arquivo_saida)
+            _processar_clipe(caminho_arquivo_entrada, float(destaque["inicio"]), float(destaque["fim"]), proporcao, caminho_arquivo_saida)
             resultados.append({**destaque, "clip_url": caminho_arquivo_saida})
         except Exception as e:
             print(f"[clipe] {indice} falhou: {e}", flush=True)

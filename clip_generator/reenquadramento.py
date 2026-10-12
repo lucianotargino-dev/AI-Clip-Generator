@@ -40,7 +40,7 @@ def _recortar_trecho(caminho_video: str, inicio: float, fim: float) -> str:
 
 
 def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_reenquadrado: str) -> str:
-    """Recorta o vídeo para a proporção desejada, acompanhando o rosto de forma contínua e fluida."""
+    """Recorta o vídeo para a proporção desejada, acompanhando o rosto de forma ultra-suave e sem micro-pulos."""
     try:
         import cv2  # type: ignore
     except ImportError as e:
@@ -77,50 +77,70 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     gravador = cv2.VideoWriter(caminho_recorte_reenquadrado_sem_audio, fourcc, fps, (largura_recorte, altura_recorte))
 
-    # Posições para tracking contínuo
-    ultimo_centro: Optional[Tuple[int, int]] = None
-    
-    # Parâmetros de ajuste fino
-    suavizacao = 0.08  # Fator de deslizamento (quanto menor, mais suave o acompanhamento da câmera)
-    tamanho_minimo_rosto = int(altura_origem * 0.10)  # Evita falsos positivos menores
-    tolerancia_ruido = 4  # Ignora tremores microscópicos do detector de face quando a pessoa está parada
+    # Posições para o filtro de suavização avançado
+    posicao_atual_x: float = largura_origem / 2.0
+    posicao_atual_y: float = altura_origem / 2.0
+    alvo_x: float = posicao_atual_x
+    alvo_y: float = posicao_atual_y
+
+    primeira_deteccao = True
+
+    # --- CONFIGURAÇÕES DE SUAVIZAÇÃO ---
+    suavizacao = 0.04           # Fator de deslizamento (menor = movimento de câmera mais pesado e fluido)
+    banda_morta = 30.0           # Se o rosto mover menos de 30px, IGNERA totalmente (elimina ruído/micro-pulos)
+    max_velocidade_px = 8.0     # Trava de velocidade: a câmera NUNCA se move mais do que 8px por quadro
+    tamanho_minimo_rosto = int(altura_origem * 0.12)  # Exige rostos definidos de pelo menos 12% da tela
 
     while True:
         ret, quadro = captura.read()
         if not ret:
             break
+
         escala_cinza = cv2.cvtColor(quadro, cv2.COLOR_BGR2GRAY)
-        
+
         rostos = classificador_rostos.detectMultiScale(
             escala_cinza,
-            scaleFactor=1.08,
-            minNeighbors=8,
+            scaleFactor=1.05,
+            minNeighbors=10,
             minSize=(tamanho_minimo_rosto, tamanho_minimo_rosto)
         )
 
         if len(rostos) > 0:
             # Seleciona o maior rosto em tela
             x, y, largura, altura = max(rostos, key=lambda f: f[2] * f[3])
-            centro_x = x + largura // 2
-            centro_y = y + altura // 2
-            if ultimo_centro is None:
-                ultimo_centro = (centro_x, centro_y)
-            else:
-                ultimo_x, ultimo_y = ultimo_centro
-                
-                # Só atualiza a posição se a variação for maior que o ruído insignificante do detector
-                delta_x = centro_x - ultimo_x
-                delta_y = centro_y - ultimo_y
-                
-                novo_x = int(ultimo_x + delta_x * suavizacao) if abs(delta_x) > tolerancia_ruido else ultimo_x
-                novo_y = int(ultimo_y + delta_y * suavizacao) if abs(delta_y) > tolerancia_ruido else ultimo_y
-                
-                ultimo_centro = (novo_x, novo_y)
+            novo_alvo_x = float(x + largura // 2)
+            novo_alvo_y = float(y + altura // 2)
 
-        # SE NÃO DETECTAR: MANTÉM O ÚLTIMO PONTO (Não reseta pro centro da tela)
-        if ultimo_centro is None:
-            ultimo_centro = (largura_origem // 2, altura_origem // 2)
-        centro_x, centro_y = ultimo_centro
+            if primeira_deteccao:
+                posicao_atual_x = novo_alvo_x
+                posicao_atual_y = novo_alvo_y
+                alvo_x = novo_alvo_x
+                alvo_y = novo_alvo_y
+                primeira_deteccao = False
+            else:
+                # Aplica a Banda Morta (Deadzone): Só altera o alvo se a mudança for significativa
+                if abs(novo_alvo_x - alvo_x) > banda_morta:
+                    alvo_x = novo_alvo_x
+                if abs(novo_alvo_y - alvo_y) > banda_morta:
+                    alvo_y = novo_alvo_y
+
+        # --- CÁLCULO DE MOVIMENTO SUAVE (LERP + CLAMP DE VELOCIDADE) ---
+        distancia_x = alvo_x - posicao_atual_x
+        distancia_y = alvo_y - posicao_atual_y
+
+        # Calcula o passo suave
+        passo_x = distancia_x * suavizacao
+        passo_y = distancia_y * suavizacao
+
+        # Limita a velocidade máxima para evitar QUALQUER pulo abrupto
+        passo_x = max(-max_velocidade_px, min(max_velocidade_px, passo_x))
+        passo_y = max(-max_velocidade_px, min(max_velocidade_px, passo_y))
+
+        posicao_atual_x += passo_x
+        posicao_atual_y += passo_y
+
+        centro_x = int(posicao_atual_x)
+        centro_y = int(posicao_atual_y)
 
         # Garante o enquadramento dentro dos limites da mídia
         inicio_x = max(0, min(largura_origem - largura_recorte, centro_x - largura_recorte // 2))
@@ -132,7 +152,7 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
     captura.release()
     gravador.release()
 
-    # Junta o áudio com FFmpeg
+    # Reanexa o áudio com FFmpeg
     comando = [
         "ffmpeg", "-y", "-loglevel", "error",
         "-i", caminho_recorte_reenquadrado_sem_audio,
@@ -168,6 +188,7 @@ def processar_destaques(caminho_video: str, destaques: List[Dict], proporcao: st
         else:
             caminho_salvamento_recorte = os.path.join(diretorio_saida, f"corte-{indice:02d}.mp4")
         print(f"[clipe] {indice}/{len(destaques)}: {destaque.get('titulo', '(sem título)')}", flush=True)
+
         caminho_recorte = None
         try:
             caminho_recorte = _recortar_trecho(caminho_video, float(destaque["inicio"]), float(destaque["fim"]))

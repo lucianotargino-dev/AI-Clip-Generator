@@ -1,13 +1,16 @@
 """Recorte e processamento dos trechos selecionados para geração de clipes.
 
-O módulo recebe o vídeo de origem e os momentos identificados pelo módulo
-de destaques e gera os respectivos arquivos de vídeo.
+Utiliza YOLO para detecção de pessoas/cenas e aplica enquadramento dinâmico 
+estilo OpusClip (telas divididas para múltiplos falantes/eventos).
 """
 
 import os
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+import cv2
+import numpy as np
 
 from .configuracao import DIRETORIO_SAIDA
 
@@ -18,8 +21,105 @@ def _calcular_proporcao(proporcao: str) -> float:
         largura, altura = proporcao.split(":")
         return float(largura) / float(altura)
     except (ValueError, ZeroDivisionError):
-        print(f"[Reenquadramento] Proporção inválida: {proporcao!r}. Utilizando a proporção padrão 9:16.")
         return 9.0 / 16.0
+
+
+def _detectar_corte_de_cena(quadro_atual: np.ndarray, quadro_anterior: Optional[np.ndarray], limiar: float = 0.45) -> bool:
+    """Identifica se houve uma mudança brusca de ângulo/câmera no vídeo original."""
+    if quadro_anterior is None:
+        return True
+    
+    hist_atual = cv2.calcHist([quadro_atual], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
+    hist_ant = cv2.calcHist([quadro_anterior], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
+    
+    cv2.normalize(hist_atual, hist_atual)
+    cv2.normalize(hist_ant, hist_ant)
+    
+    distancia = cv2.compareHist(hist_atual, hist_ant, cv2.HISTCMP_CORREL)
+    return distancia < (1.0 - limiar)
+
+
+def _extrair_crop_pessoa(quadro: np.ndarray, bbox: Tuple[int, int, int, int]) -> np.ndarray:
+    """Extrai uma região de uma pessoa mantendo a centralização do corpo/rosto."""
+    x1, y1, x2, y2 = bbox
+    alt_q, larg_q = quadro.shape[:0], quadro.shape[1]
+    
+    # Expandir margem para enquadramento de meio-corpo
+    largura_box = x2 - x1
+    altura_box = y2 - y1
+    
+    centro_x = x1 + largura_box // 2
+    centro_y = y1 + altura_box // 2
+    
+    dimensao = max(largura_box, altura_box)
+    
+    nx1 = max(0, centro_x - dimensao // 2)
+    ny1 = max(0, centro_y - dimensao // 2)
+    nx2 = min(larg_q, centro_x + dimensao // 2)
+    ny2 = min(alt_q, centro_y + dimensao // 2)
+    
+    crop = quadro[ny1:ny2, nx1:nx2]
+    if crop.size == 0:
+        return cv2.resize(quadro, (360, 640))
+    return crop
+
+
+def _montar_grid_dinamico(quadro: np.ndarray, pessoas_bboxes: List[Tuple[int, int, int, int]], larg_alvo: int, alt_alvo: int) -> np.ndarray:
+    """Gera a imagem final montando o layout em Grid conforme a quantidade de pessoas."""
+    qtd = len(pessoas_bboxes)
+    
+    # Caso 0 ou 1 Pessoa: Tela Cheia 9:16
+    if qtd <= 1:
+        if qtd == 1:
+            crop = _extrair_crop_pessoa(quadro, pessoas_bboxes[0])
+            return cv2.resize(crop, (larg_alvo, alt_alvo))
+        else:
+            # Padrão central se não houver detecção
+            alt_orig, larg_orig = quadro.shape[:2]
+            crop_w = int(alt_orig * (9 / 16))
+            cx = larg_orig // 2
+            crop = quadro[:, max(0, cx - crop_w // 2):min(larg_orig, cx + crop_w // 2)]
+            return cv2.resize(crop, (larg_alvo, alt_alvo))
+
+    canvas = np.zeros((alt_alvo, larg_alvo, 3), dtype=np.uint8)
+
+    # Caso 2 Pessoas: Divisão Vertical (Topo e Base)
+    if qtd == 2:
+        h_metade = alt_alvo // 2
+        p1 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[0]), (larg_alvo, h_metade))
+        p2 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[1]), (larg_alvo, alt_alvo - h_metade))
+        canvas[0:h_metade, :] = p1
+        canvas[h_metade:, :] = p2
+
+    # Caso 3 Pessoas: Layout "T" (2 em Cima, 1 Embaixo)
+    elif qtd == 3:
+        h_metade = alt_alvo // 2
+        w_metade = larg_alvo // 2
+        
+        p1 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[0]), (w_metade, h_metade))
+        p2 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[1]), (larg_alvo - w_metade, h_metade))
+        p3 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[2]), (larg_alvo, alt_alvo - h_metade))
+        
+        canvas[0:h_metade, 0:w_metade] = p1
+        canvas[0:h_metade, w_metade:] = p2
+        canvas[h_metade:, :] = p3
+
+    # Caso 4 ou mais Pessoas: Grid 2x2
+    else:
+        h_metade = alt_alvo // 2
+        w_metade = larg_alvo // 2
+        
+        p1 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[0]), (w_metade, h_metade))
+        p2 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[1]), (larg_alvo - w_metade, h_metade))
+        p3 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[2]), (w_metade, alt_alvo - h_metade))
+        p4 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[3]), (larg_alvo - w_metade, alt_alvo - h_metade))
+        
+        canvas[0:h_metade, 0:w_metade] = p1
+        canvas[0:h_metade, w_metade:] = p2
+        canvas[h_metade:, 0:w_metade] = p3
+        canvas[h_metade:, w_metade:] = p4
+
+    return canvas
 
 
 def _recortar_trecho(caminho_video: str, inicio: float, fim: float) -> str:
@@ -40,119 +140,74 @@ def _recortar_trecho(caminho_video: str, inicio: float, fim: float) -> str:
 
 
 def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_reenquadrado: str) -> str:
-    """Recorta o vídeo para a proporção desejada, acompanhando o rosto de forma ultra-suave e sem micro-pulos."""
+    """Recorta o vídeo adaptando dinamicamente para grids de 1 a 4 pessoas via YOLO."""
     try:
-        import cv2  # type: ignore
+        from ultralytics import YOLO  # type: ignore
     except ImportError as e:
         raise RuntimeError(
-            "A biblioteca OpenCV é necessária para o reenquadramento. "
-            "Instale-a com:\n"
-            "    pip install -r requirements.txt"
+            "A biblioteca Ultralytics é necessária para o reenquadramento YOLO. Instale-a com:\n"
+            "    pip install ultralytics"
         ) from e
 
-    proporcao_alvo = _calcular_proporcao(proporcao)
+    # Carrega modelo YOLO leve pré-treinado
+    modelo_yolo = YOLO("yolov8n.pt")
 
     captura = cv2.VideoCapture(caminho_recorte)
     if not captura.isOpened():
         raise RuntimeError(f"Não foi possível abrir o vídeo: {caminho_recorte}")
 
-    largura_origem = int(captura.get(cv2.CAP_PROP_FRAME_WIDTH))
     altura_origem = int(captura.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = captura.get(cv2.CAP_PROP_FPS) or 30.0
 
-    # Calcula as dimensões do recorte mantendo a proporção vertical
-    if proporcao_alvo < largura_origem / altura_origem:
-        altura_recorte = altura_origem
-        largura_recorte = int(altura_recorte * proporcao_alvo)
-    else:
-        largura_recorte = largura_origem
-        altura_recorte = int(largura_recorte / proporcao_alvo)
-
-    largura_recorte = max(2, largura_recorte - (largura_recorte % 2))
-    altura_recorte = max(2, altura_recorte - (altura_recorte % 2))
-
-    classificador_rostos = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    # Resolução padrão do vídeo final (1080x1920)
+    largura_saida = 1080
+    altura_saida = 1920
 
     caminho_recorte_reenquadrado_sem_audio = caminho_recorte + ".silent.mp4"
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    gravador = cv2.VideoWriter(caminho_recorte_reenquadrado_sem_audio, fourcc, fps, (largura_recorte, altura_recorte))
+    gravador = cv2.VideoWriter(caminho_recorte_reenquadrado_sem_audio, fourcc, fps, (largura_saida, altura_saida))
 
-    # Posições para o filtro de suavização avançado
-    posicao_atual_x: float = largura_origem / 2.0
-    posicao_atual_y: float = altura_origem / 2.0
-    alvo_x: float = posicao_atual_x
-    alvo_y: float = posicao_atual_y
-
-    primeira_deteccao = True
-
-    # --- CONFIGURAÇÕES DE SUAVIZAÇÃO ---
-    suavizacao = 0.04           # Fator de deslizamento (menor = movimento de câmera mais pesado e fluido)
-    banda_morta = 30.0           # Se o rosto mover menos de 30px, IGNERA totalmente (elimina ruído/micro-pulos)
-    max_velocidade_px = 8.0     # Trava de velocidade: a câmera NUNCA se move mais do que 8px por quadro
-    tamanho_minimo_rosto = int(altura_origem * 0.12)  # Exige rostos definidos de pelo menos 12% da tela
+    quadro_anterior: Optional[np.ndarray] = None
+    bboxes_atuais: List[Tuple[int, int, int, int]] = []
 
     while True:
         ret, quadro = captura.read()
         if not ret:
             break
 
-        escala_cinza = cv2.cvtColor(quadro, cv2.COLOR_BGR2GRAY)
+        # Detecta troca de cena no vídeo original (Corte Seco)
+        troca_de_cena = _detectar_corte_de_cena(quadro, quadro_anterior)
 
-        rostos = classificador_rostos.detectMultiScale(
-            escala_cinza,
-            scaleFactor=1.05,
-            minNeighbors=10,
-            minSize=(tamanho_minimo_rosto, tamanho_minimo_rosto)
-        )
+        # Atualiza a detecção de pessoas a cada troca de cena ou periodicamente
+        if troca_de_cena or len(bboxes_atuais) == 0:
+            resultados = modelo_yolo(quadro, verbose=False)[0]
+            novas_boxes = []
+            
+            for box in resultados.boxes:
+                classe = int(box.cls[0])
+                confianca = float(box.conf[0])
+                
+                # Classe 0 = 'person' no modelo YOLO COCO
+                if classe == 0 and confianca > 0.4:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    # Filtra pessoas muito pequenas no fundo
+                    if (y2 - y1) > (altura_origem * 0.15):
+                        novas_boxes.append((x1, y1, x2, y2))
+            
+            # Ordena da esquerda para a direita na tela
+            novas_boxes = sorted(novas_boxes, key=lambda b: b[0])
+            bboxes_atuais = novas_boxes[:4]  # Limita a 4 pessoas max no grid
 
-        if len(rostos) > 0:
-            # Seleciona o maior rosto em tela
-            x, y, largura, altura = max(rostos, key=lambda f: f[2] * f[3])
-            novo_alvo_x = float(x + largura // 2)
-            novo_alvo_y = float(y + altura // 2)
-
-            if primeira_deteccao:
-                posicao_atual_x = novo_alvo_x
-                posicao_atual_y = novo_alvo_y
-                alvo_x = novo_alvo_x
-                alvo_y = novo_alvo_y
-                primeira_deteccao = False
-            else:
-                # Aplica a Banda Morta (Deadzone): Só altera o alvo se a mudança for significativa
-                if abs(novo_alvo_x - alvo_x) > banda_morta:
-                    alvo_x = novo_alvo_x
-                if abs(novo_alvo_y - alvo_y) > banda_morta:
-                    alvo_y = novo_alvo_y
-
-        # --- CÁLCULO DE MOVIMENTO SUAVE (LERP + CLAMP DE VELOCIDADE) ---
-        distancia_x = alvo_x - posicao_atual_x
-        distancia_y = alvo_y - posicao_atual_y
-
-        # Calcula o passo suave
-        passo_x = distancia_x * suavizacao
-        passo_y = distancia_y * suavizacao
-
-        # Limita a velocidade máxima para evitar QUALQUER pulo abrupto
-        passo_x = max(-max_velocidade_px, min(max_velocidade_px, passo_x))
-        passo_y = max(-max_velocidade_px, min(max_velocidade_px, passo_y))
-
-        posicao_atual_x += passo_x
-        posicao_atual_y += passo_y
-
-        centro_x = int(posicao_atual_x)
-        centro_y = int(posicao_atual_y)
-
-        # Garante o enquadramento dentro dos limites da mídia
-        inicio_x = max(0, min(largura_origem - largura_recorte, centro_x - largura_recorte // 2))
-        inicio_y = max(0, min(altura_origem - altura_recorte, centro_y - altura_recorte // 2))
-
-        quadro_recortado = quadro[inicio_y:inicio_y + altura_recorte, inicio_x:inicio_x + largura_recorte]
-        gravador.write(quadro_recortado)
+        # Gera o quadro final no layout em grid correto
+        quadro_final = _montar_grid_dinamico(quadro, bboxes_atuais, largura_saida, altura_saida)
+        gravador.write(quadro_final)
+        
+        quadro_anterior = quadro.copy()
 
     captura.release()
     gravador.release()
 
-    # Reanexa o áudio com FFmpeg
+    # Reanexa o áudio usando FFmpeg
     comando = [
         "ffmpeg", "-y", "-loglevel", "error",
         "-i", caminho_recorte_reenquadrado_sem_audio,
@@ -163,7 +218,6 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
         "-shortest",
         caminho_recorte_reenquadrado,
     ]
-
     subprocess.run(comando, check=True)
 
     if os.path.exists(caminho_recorte_reenquadrado_sem_audio):
@@ -187,6 +241,7 @@ def processar_destaques(caminho_video: str, destaques: List[Dict], proporcao: st
             caminho_salvamento_recorte = os.path.join(diretorio_saida, f"corte-{indice:02d}_{video_id}.mp4")
         else:
             caminho_salvamento_recorte = os.path.join(diretorio_saida, f"corte-{indice:02d}.mp4")
+        
         print(f"[clipe] {indice}/{len(destaques)}: {destaque.get('titulo', '(sem título)')}", flush=True)
 
         caminho_recorte = None

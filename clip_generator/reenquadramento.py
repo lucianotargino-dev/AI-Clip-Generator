@@ -1,10 +1,12 @@
 """Recorte e processamento dos trechos selecionados para geração de clipes.
 
-Utiliza YOLO para detecção de pessoas/cenas e aplica enquadramento dinâmico 
-estilo OpusClip (telas divididas para múltiplos falantes/eventos).
+Utiliza YOLO para detecção de pessoas/cenas, aplica enquadramento dinâmico 
+estilo OpusClip (grids de 1 a 4 câmeras) e garante o cálculo estrito de aspect 
+ratio (crop estilo 'cover' sem achatamento) com acompanhamento suave e cortes secos.
 """
 
 import os
+import random
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -39,80 +41,85 @@ def _detectar_corte_de_cena(quadro_atual: np.ndarray, quadro_anterior: Optional[
     return distancia < (1.0 - limiar)
 
 
-def _extrair_crop_pessoa(quadro: np.ndarray, bbox: Tuple[int, int, int, int]) -> np.ndarray:
-    """Extrai uma região de uma pessoa mantendo a centralização do corpo/rosto."""
-    x1, y1, x2, y2 = bbox
+def _crop_proporcional_cover(quadro: np.ndarray, centro_x: float, centro_y: float, larg_destino: int, alt_destino: int) -> np.ndarray:
+    """Realiza o recorte focado no centro mantendo a proporção exata de destino (estilo object-fit: cover).
+    
+    Garante ZERO achatamento ou esticamento da imagem.
+    """
     alt_q, larg_q = quadro.shape[:2]
+    proporcao_destino = larg_destino / alt_destino
+
+    # Calcula as dimensões do recorte ideal na imagem original
+    if larg_q / alt_q > proporcao_destino:
+        # A imagem de origem é mais larga do que o espaço de destino
+        alt_crop = alt_q
+        larg_crop = int(alt_crop * proporcao_destino)
+    else:
+        # A imagem de origem é mais alta do que o espaço de destino
+        larg_crop = larg_q
+        alt_crop = int(larg_crop / proporcao_destino)
+
+    # Garante que as bordas fiquem dentro do quadro original
+    x1 = max(0, min(larg_q - larg_crop, int(centro_x - larg_crop / 2)))
+    y1 = max(0, min(alt_q - alt_crop, int(centro_y - alt_crop / 2)))
+    x2 = x1 + larg_crop
+    y2 = y1 + alt_crop
+
+    crop = quadro[y1:y2, x1:x2]
     
-    # Expandir margem para enquadramento de meio-corpo
-    largura_box = x2 - x1
-    altura_box = y2 - y1
-    
-    centro_x = x1 + largura_box // 2
-    centro_y = y1 + altura_box // 2
-    
-    dimensao = max(largura_box, altura_box)
-    
-    nx1 = max(0, centro_x - dimensao // 2)
-    ny1 = max(0, centro_y - dimensao // 2)
-    nx2 = min(larg_q, centro_x + dimensao // 2)
-    ny2 = min(alt_q, centro_y + dimensao // 2)
-    
-    crop = quadro[ny1:ny2, nx1:nx2]
     if crop.size == 0:
-        return cv2.resize(quadro, (360, 640))
-    return crop
+        crop = quadro
+
+    # Redimensiona mantendo o aspect ratio perfeito
+    return cv2.resize(crop, (larg_destino, alt_destino), interpolation=cv2.INTER_LANCZOS4)
 
 
-def _montar_grid_dinamico(quadro: np.ndarray, pessoas_bboxes: List[Tuple[int, int, int, int]], larg_alvo: int, alt_alvo: int) -> np.ndarray:
-    """Gera a imagem final montando o layout em Grid conforme a quantidade de pessoas."""
-    qtd = len(pessoas_bboxes)
+def _montar_grid_dinamico(quadro: np.ndarray, centros_atuais: List[Tuple[float, float]], larg_alvo: int, alt_alvo: int) -> np.ndarray:
+    """Gera o quadro final montando o layout em Grid (1 a 4 câmeras) sem achatar imagens."""
+    qtd = len(centros_atuais)
     
     # Caso 0 ou 1 Pessoa: Tela Cheia 9:16
     if qtd <= 1:
         if qtd == 1:
-            crop = _extrair_crop_pessoa(quadro, pessoas_bboxes[0])
-            return cv2.resize(crop, (larg_alvo, alt_alvo))
+            cx, cy = centros_atuais[0]
+            return _crop_proporcional_cover(quadro, cx, cy, larg_alvo, alt_alvo)
         else:
-            # Padrão central se não houver detecção
+            # Padrão centralizado se nada for detectado
             alt_orig, larg_orig = quadro.shape[:2]
-            crop_w = int(alt_orig * (9 / 16))
-            cx = larg_orig // 2
-            crop = quadro[:, max(0, cx - crop_w // 2):min(larg_orig, cx + crop_w // 2)]
-            return cv2.resize(crop, (larg_alvo, alt_alvo))
+            return _crop_proporcional_cover(quadro, larg_orig / 2, alt_orig / 2, larg_alvo, alt_alvo)
 
     canvas = np.zeros((alt_alvo, larg_alvo, 3), dtype=np.uint8)
 
     # Caso 2 Pessoas: Divisão Vertical (Topo e Base)
     if qtd == 2:
         h_metade = alt_alvo // 2
-        p1 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[0]), (larg_alvo, h_metade))
-        p2 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[1]), (larg_alvo, alt_alvo - h_metade))
+        p1 = _crop_proporcional_cover(quadro, centros_atuais[0][0], centros_atuais[0][1], larg_alvo, h_metade)
+        p2 = _crop_proporcional_cover(quadro, centros_atuais[1][0], centros_atuais[1][1], larg_alvo, alt_alvo - h_metade)
         canvas[0:h_metade, :] = p1
         canvas[h_metade:, :] = p2
 
-    # Caso 3 Pessoas: Layout "T" (2 em Cima, 1 Embaixo)
+    # Caso 3 Pessoas: Layout em "T" (2 no topo lado a lado, 1 na base)
     elif qtd == 3:
         h_metade = alt_alvo // 2
         w_metade = larg_alvo // 2
         
-        p1 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[0]), (w_metade, h_metade))
-        p2 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[1]), (larg_alvo - w_metade, h_metade))
-        p3 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[2]), (larg_alvo, alt_alvo - h_metade))
+        p1 = _crop_proporcional_cover(quadro, centros_atuais[0][0], centros_atuais[0][1], w_metade, h_metade)
+        p2 = _crop_proporcional_cover(quadro, centros_atuais[1][0], centros_atuais[1][1], larg_alvo - w_metade, h_metade)
+        p3 = _crop_proporcional_cover(quadro, centros_atuais[2][0], centros_atuais[2][1], larg_alvo, alt_alvo - h_metade)
         
         canvas[0:h_metade, 0:w_metade] = p1
         canvas[0:h_metade, w_metade:] = p2
         canvas[h_metade:, :] = p3
 
-    # Caso 4 ou mais Pessoas: Grid 2x2
+    # Caso 4 Pessoas: Grid 2x2
     else:
         h_metade = alt_alvo // 2
         w_metade = larg_alvo // 2
         
-        p1 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[0]), (w_metade, h_metade))
-        p2 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[1]), (larg_alvo - w_metade, h_metade))
-        p3 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[2]), (w_metade, alt_alvo - h_metade))
-        p4 = cv2.resize(_extrair_crop_pessoa(quadro, pessoas_bboxes[3]), (larg_alvo - w_metade, alt_alvo - h_metade))
+        p1 = _crop_proporcional_cover(quadro, centros_atuais[0][0], centros_atuais[0][1], w_metade, h_metade)
+        p2 = _crop_proporcional_cover(quadro, centros_atuais[1][0], centros_atuais[1][1], larg_alvo - w_metade, h_metade)
+        p3 = _crop_proporcional_cover(quadro, centros_atuais[2][0], centros_atuais[2][1], w_metade, alt_alvo - h_metade)
+        p4 = _crop_proporcional_cover(quadro, centros_atuais[3][0], centros_atuais[3][1], larg_alvo - w_metade, alt_alvo - h_metade)
         
         canvas[0:h_metade, 0:w_metade] = p1
         canvas[0:h_metade, w_metade:] = p2
@@ -140,7 +147,7 @@ def _recortar_trecho(caminho_video: str, inicio: float, fim: float) -> str:
 
 
 def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_reenquadrado: str) -> str:
-    """Recorta o vídeo adaptando dinamicamente para grids de 1 a 4 pessoas via YOLO."""
+    """Recorta o vídeo adaptando dinamicamente para grids de 1 a 4 pessoas via YOLO com rastreamento suave."""
     try:
         from ultralytics import YOLO  # type: ignore
     except ImportError as e:
@@ -149,7 +156,6 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
             "    pip install ultralytics"
         ) from e
 
-    # Carrega modelo YOLO leve pré-treinado
     modelo_yolo = YOLO("yolov8n.pt")
 
     captura = cv2.VideoCapture(caminho_recorte)
@@ -159,7 +165,6 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
     altura_origem = int(captura.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = captura.get(cv2.CAP_PROP_FPS) or 30.0
 
-    # Resolução padrão do vídeo final (1080x1920)
     largura_saida = 1080
     altura_saida = 1920
 
@@ -168,46 +173,76 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
     gravador = cv2.VideoWriter(caminho_recorte_reenquadrado_sem_audio, fourcc, fps, (largura_saida, altura_saida))
 
     quadro_anterior: Optional[np.ndarray] = None
-    bboxes_atuais: List[Tuple[int, int, int, int]] = []
+    
+    # Armazena os centros dos alvos
+    centros_atuais: List[Tuple[float, float]] = []
+    centros_alvo: List[Tuple[float, float]] = []
+    
+    suavizacao = 0.08  # Fator de deslizamento suave do tracking (LERP)
 
     while True:
         ret, quadro = captura.read()
         if not ret:
             break
 
-        # Detecta troca de cena no vídeo original (Corte Seco)
         troca_de_cena = _detectar_corte_de_cena(quadro, quadro_anterior)
 
-        # Atualiza a detecção de pessoas a cada troca de cena ou periodicamente
-        if troca_de_cena or len(bboxes_atuais) == 0:
-            resultados = modelo_yolo(quadro, verbose=False)[0]
-            novas_boxes = []
-            
-            for box in resultados.boxes:
-                classe = int(box.cls[0])
-                confianca = float(box.conf[0])
-                
-                # Classe 0 = 'person' no modelo YOLO COCO
-                if classe == 0 and confianca > 0.4:
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    # Filtra pessoas muito pequenas no fundo
-                    if (y2 - y1) > (altura_origem * 0.15):
-                        novas_boxes.append((x1, y1, x2, y2))
-            
-            # Ordena da esquerda para a direita na tela
-            novas_boxes = sorted(novas_boxes, key=lambda b: b[0])
-            bboxes_atuais = novas_boxes[:4]  # Limita a 4 pessoas max no grid
+        # Executa detecção YOLO
+        resultados = modelo_yolo(quadro, verbose=False)[0]
+        novos_centros = []
 
-        # Gera o quadro final no layout em grid correto
-        quadro_final = _montar_grid_dinamico(quadro, bboxes_atuais, largura_saida, altura_saida)
+        for box in resultados.boxes:
+            classe = int(box.cls[0])
+            confianca = float(box.conf[0])
+            
+            # Classe 0 = 'person' no modelo YOLO
+            if classe == 0 and confianca > 0.35:
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                if (y2 - y1) > (altura_origem * 0.12):
+                    cx = float(x1 + (x2 - x1) / 2)
+                    cy = float(y1 + (y2 - y1) / 2)
+                    novos_centros.append((cx, cy))
+
+        # Se houver mais de 4 alvos, escolhe 4 aleatoriamente de forma consistente
+        if len(novos_centros) > 4:
+            # Caso haja corte de cena, re-sorteia os 4 alvos aleatórios
+            if troca_de_cena:
+                random.seed(int(captura.get(cv2.CAP_PROP_POS_FRAMES)))
+            random.shuffle(novos_centros)
+            novos_centros = novos_centros[:4]
+
+        # Ordena da esquerda para a direita para manter posições lógicas no grid
+        novos_centros = sorted(novos_centros, key=lambda c: c[0])
+
+        # Se houver mudança brusca de cena ou alteração na quantidade de pessoas -> CORTE SECO
+        if troca_de_cena or len(novos_centros) != len(centros_alvo):
+            centros_alvo = novos_centros
+            centros_atuais = list(novos_centros)  # Pula transição suave (corte seco imediato)
+        else:
+            centros_alvo = novos_centros
+
+            # Acompanhamento suave (LERP) para pequenos movimentos dentro da mesma cena
+            novos_atuais = []
+            for idx in range(len(centros_atuais)):
+                cx_atual, cy_atual = centros_atuais[idx]
+                cx_alvo, cy_alvo = centros_alvo[idx]
+
+                nx = cx_atual + (cx_alvo - cx_atual) * suavizacao
+                ny = cy_atual + (cy_alvo - cy_atual) * suavizacao
+                novos_atuais.append((nx, ny))
+
+            centros_atuais = novos_atuais
+
+        # Monta a imagem final sem achatar e com tracking aplicado
+        quadro_final = _montar_grid_dinamico(quadro, centros_atuais, largura_saida, altura_saida)
         gravador.write(quadro_final)
-        
+
         quadro_anterior = quadro.copy()
 
     captura.release()
     gravador.release()
 
-    # Reanexa o áudio usando FFmpeg
+    # Reanexa o áudio via FFmpeg
     comando = [
         "ffmpeg", "-y", "-loglevel", "error",
         "-i", caminho_recorte_reenquadrado_sem_audio,
@@ -242,7 +277,7 @@ def processar_destaques(caminho_video: str, destaques: List[Dict], proporcao: st
         else:
             caminho_salvamento_recorte = os.path.join(diretorio_saida, f"corte-{indice:02d}.mp4")
         
-        print(f"[clipe] {indice}/{len(destaques)}: {destaque.get('titulo', '(sem título)')}", flush=True)
+        print(f"[Reenquadramento] {indice}/{len(destaques)}: {destaque.get('titulo', '(sem título)')}", flush=True)
 
         caminho_recorte = None
         try:
@@ -250,7 +285,7 @@ def processar_destaques(caminho_video: str, destaques: List[Dict], proporcao: st
             caminho_recorte_reenquadrado = _reenquadrar_vertical(caminho_recorte, proporcao, caminho_salvamento_recorte)
             resultados.append({**destaque, "clip_url": caminho_recorte_reenquadrado})
         except Exception as e:
-            print(f"[clipe] {indice} falhou: {e}", flush=True)
+            print(f"[Reenquadramento] {indice} falhou: {e}", flush=True)
             resultados.append({**destaque, "clip_url": None, "error": str(e)})
         finally:
             if caminho_recorte and os.path.exists(caminho_recorte):

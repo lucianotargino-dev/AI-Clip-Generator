@@ -153,17 +153,16 @@ def processar_destaques(caminho_video: str, destaques: List[Dict], proporcao: st
         else:
             caminho_salvamento_recorte = os.path.join(diretorio_saida, f"corte-{indice:02d}.mp4")
         print(f"[clipe] {indice}/{len(destaques)}: {destaque.get('titulo', '(sem título)')}", flush=True)
+        caminho_recorte = None
         try:
-            try:
-                caminho_recorte = _recortar_trecho(caminho_video, float(destaque["inicio"]), float(destaque["fim"]))
-                caminho_recorte_reenquadrado = _reenquadrar_vertical(caminho_recorte, proporcao, caminho_salvamento_recorte)
-            finally:
-                if os.path.exists(caminho_recorte):
-                    os.remove(caminho_recorte)
-
+            caminho_recorte = _recortar_trecho(caminho_video, float(destaque["inicio"]), float(destaque["fim"]))
+            caminho_recorte_reenquadrado = _reenquadrar_vertical(caminho_recorte, proporcao, caminho_salvamento_recorte)
             resultados.append({**destaque, "clip_url": caminho_recorte_reenquadrado})
         except Exception as e:
             print(f"[clipe] {indice} falhou: {e}", flush=True)
             resultados.append({**destaque, "clip_url": None, "error": str(e)})
+        finally:
+            if caminho_recorte and os.path.exists(caminho_recorte):
+                os.remove(caminho_recorte)
 
     return resultados

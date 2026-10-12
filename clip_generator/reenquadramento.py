@@ -40,7 +40,7 @@ def _recortar_trecho(caminho_video: str, inicio: float, fim: float) -> str:
 
 
 def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_reenquadrado: str) -> str:
-    """Recorta o vídeo para a proporção desejada, acompanhando rostos de forma estável com cortes limpos."""
+    """Recorta o vídeo para a proporção desejada, acompanhando o rosto de forma contínua e fluida."""
     try:
         import cv2  # type: ignore
     except ImportError as e:
@@ -60,7 +60,7 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
     altura_origem = int(captura.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = captura.get(cv2.CAP_PROP_FPS) or 30.0
 
-    # Calcula as dimensões exatas da janela de corte
+    # Calcula as dimensões do recorte mantendo a proporção vertical
     if proporcao_alvo < largura_origem / altura_origem:
         altura_recorte = altura_origem
         largura_recorte = int(altura_recorte * proporcao_alvo)
@@ -77,58 +77,54 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     gravador = cv2.VideoWriter(caminho_recorte_reenquadrado_sem_audio, fourcc, fps, (largura_recorte, altura_recorte))
 
-    # Posição padrão padrão (centro da imagem)
-    centro_padrao_x = largura_origem // 2
-    centro_padrao_y = altura_origem // 2
-
-    # Posição atual fixa da câmera
-    posicao_atual_x = centro_padrao_x
-    posicao_atual_y = centro_padrao_y
-
-    # Filtros de ruído e movimento
-    tamanho_minimo_rosto = int(altura_origem * 0.12)  # Exige rostos de ao menos 12% da altura da tela
-    limiar_movimento = int(largura_origem * 0.15)     # Zona morta: só corta a câmera se mudar mais de 15% da largura
-
-    # Registra se algum rosto válido foi detectado em todo o vídeo
-    teve_deteccao = False
+    # Posições para tracking contínuo
+    ultimo_centro: Optional[Tuple[int, int]] = None
+    
+    # Parâmetros de ajuste fino
+    suavizacao = 0.08  # Fator de deslizamento (quanto menor, mais suave o acompanhamento da câmera)
+    tamanho_minimo_rosto = int(altura_origem * 0.10)  # Evita falsos positivos menores
+    tolerancia_ruido = 4  # Ignora tremores microscópicos do detector de face quando a pessoa está parada
 
     while True:
         ret, quadro = captura.read()
         if not ret:
             break
-
         escala_cinza = cv2.cvtColor(quadro, cv2.COLOR_BGR2GRAY)
-
-        # Detecção com parâmetros mais rigorosos contra falsos positivos
+        
         rostos = classificador_rostos.detectMultiScale(
             escala_cinza,
-            scaleFactor=1.05,
-            minNeighbors=10,
+            scaleFactor=1.08,
+            minNeighbors=8,
             minSize=(tamanho_minimo_rosto, tamanho_minimo_rosto)
         )
 
         if len(rostos) > 0:
-            teve_deteccao = True
-
-            # Seleciona o maior rosto detectado no frame
+            # Seleciona o maior rosto em tela
             x, y, largura, altura = max(rostos, key=lambda f: f[2] * f[3])
-            
-            alvo_x = x + largura // 2
-            alvo_y = y + altura // 2
+            centro_x = x + largura // 2
+            centro_y = y + altura // 2
+            if ultimo_centro is None:
+                ultimo_centro = (centro_x, centro_y)
+            else:
+                ultimo_x, ultimo_y = ultimo_centro
+                
+                # Só atualiza a posição se a variação for maior que o ruído insignificante do detector
+                delta_x = centro_x - ultimo_x
+                delta_y = centro_y - ultimo_y
+                
+                novo_x = int(ultimo_x + delta_x * suavizacao) if abs(delta_x) > tolerancia_ruido else ultimo_x
+                novo_y = int(ultimo_y + delta_y * suavizacao) if abs(delta_y) > tolerancia_ruido else ultimo_y
+                
+                ultimo_centro = (novo_x, novo_y)
 
-            # Se o movimento ultrapassar a zona morta (deadzone), faz o corte para a nova posição
-            if abs(alvo_x - posicao_atual_x) > limiar_movimento:
-                posicao_atual_x = alvo_x
-                posicao_atual_y = alvo_y
+        # SE NÃO DETECTAR: MANTÉM O ÚLTIMO PONTO (Não reseta pro centro da tela)
+        if ultimo_centro is None:
+            ultimo_centro = (largura_origem // 2, altura_origem // 2)
+        centro_x, centro_y = ultimo_centro
 
-        # Se não houve nenhuma detecção durante todo o vídeo até agora, mantém centralizado
-        if not teve_deteccao:
-            posicao_atual_x = centro_padrao_x
-            posicao_atual_y = centro_padrao_y
-
-        # Garante que os limites do recorte não saiam da imagem original
-        inicio_x = max(0, min(largura_origem - largura_recorte, posicao_atual_x - largura_recorte // 2))
-        inicio_y = max(0, min(altura_origem - altura_recorte, posicao_atual_y - altura_recorte // 2))
+        # Garante o enquadramento dentro dos limites da mídia
+        inicio_x = max(0, min(largura_origem - largura_recorte, centro_x - largura_recorte // 2))
+        inicio_y = max(0, min(altura_origem - altura_recorte, centro_y - altura_recorte // 2))
 
         quadro_recortado = quadro[inicio_y:inicio_y + altura_recorte, inicio_x:inicio_x + largura_recorte]
         gravador.write(quadro_recortado)
@@ -136,7 +132,7 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
     captura.release()
     gravador.release()
 
-    # Reanexa o áudio original do clipe usando FFmpeg com nomenclatura padronizada em português
+    # Junta o áudio com FFmpeg
     comando = [
         "ffmpeg", "-y", "-loglevel", "error",
         "-i", caminho_recorte_reenquadrado_sem_audio,
@@ -147,6 +143,7 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
         "-shortest",
         caminho_recorte_reenquadrado,
     ]
+
     subprocess.run(comando, check=True)
 
     if os.path.exists(caminho_recorte_reenquadrado_sem_audio):

@@ -42,7 +42,7 @@ def _detectar_corte_de_cena(quadro_atual: np.ndarray, quadro_anterior: Optional[
 def _extrair_crop_pessoa(quadro: np.ndarray, bbox: Tuple[int, int, int, int]) -> np.ndarray:
     """Extrai uma região de uma pessoa mantendo a centralização do corpo/rosto."""
     x1, y1, x2, y2 = bbox
-    alt_q, larg_q = quadro.shape[:0], quadro.shape[1]
+    alt_q, larg_q = quadro.shape[:2]
     
     # Expandir margem para enquadramento de meio-corpo
     largura_box = x2 - x1

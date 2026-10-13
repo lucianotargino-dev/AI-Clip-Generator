@@ -1,8 +1,7 @@
 """Recorte e processamento dos trechos selecionados para geração de clipes.
 
-Utiliza YOLO para detecção de pessoas/cenas, aplica enquadramento dinâmico 
-estilo OpusClip (grids de 1 a 4 câmeras) e garante o cálculo estrito de aspect 
-ratio com zoom automático em pessoas distantes e sem falsos positivos.
+Utiliza YOLO para detecção de pessoas com filtro rigoroso anti-falsos-positivos (microfones/cenário),
+zoom ajustado para alvos distantes e layout dinâmico em grid.
 """
 
 import os
@@ -41,15 +40,18 @@ def _detectar_corte_de_cena(quadro_atual: np.ndarray, quadro_anterior: Optional[
     return distancia < (1.0 - limiar)
 
 
-def _crop_proporcional_cover(quadro: np.ndarray, centro_x: float, centro_y: float, larg_destino: int, alt_destino: int, fator_zoom: float = 1.0) -> np.ndarray:
-    """Realiza o recorte focado no centro mantendo a proporção exata de destino.
-    
-    Aplica fator de zoom dinâmico quando a pessoa está distante no cenário.
-    """
+def _crop_proporcional_cover(
+    quadro: np.ndarray, 
+    centro_x: float, 
+    centro_y: float, 
+    larg_destino: int, 
+    alt_destino: int,
+    fator_zoom: float = 1.0
+) -> np.ndarray:
+    """Realiza o recorte mantendo aspect ratio perfeito e aplicando zoom ampliado."""
     alt_q, larg_q = quadro.shape[:2]
     proporcao_destino = larg_destino / alt_destino
 
-    # Calcula as dimensões base do recorte na imagem original
     if larg_q / alt_q > proporcao_destino:
         alt_crop = alt_q
         larg_crop = int(alt_crop * proporcao_destino)
@@ -57,30 +59,31 @@ def _crop_proporcional_cover(quadro: np.ndarray, centro_x: float, centro_y: floa
         larg_crop = larg_q
         alt_crop = int(larg_crop / proporcao_destino)
 
-    # Aplica o Zoom (reduz a janela de corte na imagem original para fechar mais o plano)
     if fator_zoom > 1.0:
         larg_crop = int(larg_crop / fator_zoom)
         alt_crop = int(alt_crop / fator_zoom)
 
-    # Garante que as bordas fiquem estritamente dentro dos limites da mídia
     x1 = max(0, min(larg_q - larg_crop, int(centro_x - larg_crop / 2)))
     y1 = max(0, min(alt_q - alt_crop, int(centro_y - alt_crop / 2)))
     x2 = x1 + larg_crop
     y2 = y1 + alt_crop
 
     crop = quadro[y1:y2, x1:x2]
-    
     if crop.size == 0:
         crop = quadro
 
     return cv2.resize(crop, (larg_destino, alt_destino), interpolation=cv2.INTER_LANCZOS4)
 
 
-def _montar_grid_dinamico(quadro: np.ndarray, dados_alvos: List[Dict], larg_alvo: int, alt_alvo: int) -> np.ndarray:
-    """Gera o quadro final montando o layout em Grid (1 a 4 câmeras) com zoom individual."""
+def _montar_grid_dinamico(
+    quadro: np.ndarray, 
+    dados_alvos: List[Dict], 
+    larg_alvo: int, 
+    alt_alvo: int
+) -> np.ndarray:
+    """Gera o quadro final montando o layout em Grid (1 a 4 câmeras) com zoom calibrado."""
     qtd = len(dados_alvos)
     
-    # Caso 0 ou 1 Pessoa: Tela Cheia 9:16
     if qtd <= 1:
         if qtd == 1:
             alvo = dados_alvos[0]
@@ -91,7 +94,6 @@ def _montar_grid_dinamico(quadro: np.ndarray, dados_alvos: List[Dict], larg_alvo
 
     canvas = np.zeros((alt_alvo, larg_alvo, 3), dtype=np.uint8)
 
-    # Caso 2 Pessoas: Divisão Vertical (Topo e Base)
     if qtd == 2:
         h_metade = alt_alvo // 2
         p1 = _crop_proporcional_cover(quadro, dados_alvos[0]["cx"], dados_alvos[0]["cy"], larg_alvo, h_metade, dados_alvos[0]["zoom"])
@@ -99,7 +101,6 @@ def _montar_grid_dinamico(quadro: np.ndarray, dados_alvos: List[Dict], larg_alvo
         canvas[0:h_metade, :] = p1
         canvas[h_metade:, :] = p2
 
-    # Caso 3 Pessoas: Layout em "T" (2 no topo, 1 na base)
     elif qtd == 3:
         h_metade = alt_alvo // 2
         w_metade = larg_alvo // 2
@@ -112,7 +113,6 @@ def _montar_grid_dinamico(quadro: np.ndarray, dados_alvos: List[Dict], larg_alvo
         canvas[0:h_metade, w_metade:] = p2
         canvas[h_metade:, :] = p3
 
-    # Caso 4 Pessoas: Grid 2x2
     else:
         h_metade = alt_alvo // 2
         w_metade = larg_alvo // 2
@@ -148,7 +148,7 @@ def _recortar_trecho(caminho_video: str, inicio: float, fim: float) -> str:
 
 
 def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_reenquadrado: str) -> str:
-    """Recorta o vídeo adaptando dinamicamente para grids via YOLO com filtro anti-falsos-positivos e zoom automático."""
+    """Recorta o vídeo adaptando dinamicamente para grids via YOLO com filtro avançado anti-microfone."""
     try:
         from ultralytics import YOLO  # type: ignore
     except ImportError as e:
@@ -174,7 +174,6 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
     gravador = cv2.VideoWriter(caminho_recorte_reenquadrado_sem_audio, fourcc, fps, (largura_saida, altura_saida))
 
     quadro_anterior: Optional[np.ndarray] = None
-    
     alvos_atuais: List[Dict] = []
     alvos_destino: List[Dict] = []
     
@@ -194,27 +193,29 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
             classe = int(box.cls[0])
             confianca = float(box.conf[0])
             
-            # --- AJUSTE 1: Limiar de Confiança mais rigoroso (60%) para ELIMINAR FALSOS POSITIVOS ---
-            if classe == 0 and confianca > 0.60:
+            # Ajuste de confiança rigoroso (75%)
+            if classe == 0 and confianca > 0.75:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 alt_pessoa = y2 - y1
-                
-                # Exige altura mínima relevante para desconsiderar ruídos no cenário
-                if alt_pessoa > (altura_origem * 0.15):
+                cy_box = y1 + alt_pessoa / 2
+
+                # Validação espacial: ignora detecções coladas na borda inferior (evita focar em suporte de microfone)
+                if alt_pessoa > (altura_origem * 0.18) and cy_box < (altura_origem * 0.85):
                     cx = float(x1 + (x2 - x1) / 2)
-                    cy = float(y1 + alt_pessoa / 2)
+                    
+                    # Foca o centro vertical mais próximo da cabeça/rosto (1/3 superior do corpo)
+                    cy_rosto = float(y1 + alt_pessoa * 0.30)
 
-                    # --- AJUSTE 2: Lógica de ZOOM Automático para pessoas distantes ---
-                    # Se a pessoa ocupar menos de 30% da altura da tela, aplicamos zoom relativo
+                    # Zoom reforçado (1.8x a 2.4x)
                     proporcao_altura = alt_pessoa / altura_origem
-                    if proporcao_altura < 0.25:
-                        fator_zoom = 1.6  # Zoom forte para enquadrar pessoas bem longe
-                    elif proporcao_altura < 0.40:
-                        fator_zoom = 1.3  # Zoom leve/médio
+                    if proporcao_altura < 0.30:
+                        fator_zoom = 2.4  # Zoom forte para enquadramento fechado
+                    elif proporcao_altura < 0.50:
+                        fator_zoom = 1.8  # Zoom médio
                     else:
-                        fator_zoom = 1.0  # Sem zoom se já estiver em plano médio ou próximo
+                        fator_zoom = 1.2  # Zoom suave para planos já próximos
 
-                    novos_alvos.append({"cx": cx, "cy": cy, "zoom": fator_zoom})
+                    novos_alvos.append({"cx": cx, "cy": cy_rosto, "zoom": fator_zoom})
 
         if len(novos_alvos) > 4:
             if troca_de_cena:
@@ -224,7 +225,6 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
 
         novos_alvos = sorted(novos_alvos, key=lambda a: a["cx"])
 
-        # Troca de cena ou alteração na quantidade de alvos -> Corte seco imediato
         if troca_de_cena or len(novos_alvos) != len(alvos_destino):
             alvos_destino = novos_alvos
             alvos_atuais = [dict(a) for a in novos_alvos]
@@ -241,7 +241,6 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
                 cy_al = alvos_destino[idx]["cy"]
                 zoom_al = alvos_destino[idx]["zoom"]
 
-                # Interpolação suave para posição e zoom
                 nx = cx_at + (cx_al - cx_at) * suavizacao
                 ny = cy_at + (cy_al - cy_at) * suavizacao
                 nz = zoom_at + (zoom_al - zoom_at) * suavizacao
@@ -258,7 +257,6 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
     captura.release()
     gravador.release()
 
-    # Reanexa o áudio via FFmpeg
     comando = [
         "ffmpeg", "-y", "-loglevel", "error",
         "-i", caminho_recorte_reenquadrado_sem_audio,
@@ -277,7 +275,12 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
     return caminho_recorte_reenquadrado
 
 
-def processar_destaques(caminho_video: str, destaques: List[Dict], proporcao: str = "9:16", video_id: Optional[str] = None) -> List[Dict]:
+def processar_destaques(
+    caminho_video: str,
+    destaques: List[Dict],
+    proporcao: str = "9:16",
+    video_id: Optional[str] = None
+) -> List[Dict]:
     """Recorta e reenquadra os destaques, retornando os caminhos dos clipes gerados."""
     caminho = Path(caminho_video)
     diretorio_saida = caminho.parent

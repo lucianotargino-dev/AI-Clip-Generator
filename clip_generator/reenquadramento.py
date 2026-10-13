@@ -2,7 +2,7 @@
 
 Utiliza YOLO para detecção de pessoas/cenas, aplica enquadramento dinâmico 
 estilo OpusClip (grids de 1 a 4 câmeras) e garante o cálculo estrito de aspect 
-ratio (crop estilo 'cover' sem achatamento) com acompanhamento suave e cortes secos.
+ratio com zoom automático em pessoas distantes e sem falsos positivos.
 """
 
 import os
@@ -41,25 +41,28 @@ def _detectar_corte_de_cena(quadro_atual: np.ndarray, quadro_anterior: Optional[
     return distancia < (1.0 - limiar)
 
 
-def _crop_proporcional_cover(quadro: np.ndarray, centro_x: float, centro_y: float, larg_destino: int, alt_destino: int) -> np.ndarray:
-    """Realiza o recorte focado no centro mantendo a proporção exata de destino (estilo object-fit: cover).
+def _crop_proporcional_cover(quadro: np.ndarray, centro_x: float, centro_y: float, larg_destino: int, alt_destino: int, fator_zoom: float = 1.0) -> np.ndarray:
+    """Realiza o recorte focado no centro mantendo a proporção exata de destino.
     
-    Garante ZERO achatamento ou esticamento da imagem.
+    Aplica fator de zoom dinâmico quando a pessoa está distante no cenário.
     """
     alt_q, larg_q = quadro.shape[:2]
     proporcao_destino = larg_destino / alt_destino
 
-    # Calcula as dimensões do recorte ideal na imagem original
+    # Calcula as dimensões base do recorte na imagem original
     if larg_q / alt_q > proporcao_destino:
-        # A imagem de origem é mais larga do que o espaço de destino
         alt_crop = alt_q
         larg_crop = int(alt_crop * proporcao_destino)
     else:
-        # A imagem de origem é mais alta do que o espaço de destino
         larg_crop = larg_q
         alt_crop = int(larg_crop / proporcao_destino)
 
-    # Garante que as bordas fiquem dentro do quadro original
+    # Aplica o Zoom (reduz a janela de corte na imagem original para fechar mais o plano)
+    if fator_zoom > 1.0:
+        larg_crop = int(larg_crop / fator_zoom)
+        alt_crop = int(alt_crop / fator_zoom)
+
+    # Garante que as bordas fiquem estritamente dentro dos limites da mídia
     x1 = max(0, min(larg_q - larg_crop, int(centro_x - larg_crop / 2)))
     y1 = max(0, min(alt_q - alt_crop, int(centro_y - alt_crop / 2)))
     x2 = x1 + larg_crop
@@ -70,42 +73,40 @@ def _crop_proporcional_cover(quadro: np.ndarray, centro_x: float, centro_y: floa
     if crop.size == 0:
         crop = quadro
 
-    # Redimensiona mantendo o aspect ratio perfeito
     return cv2.resize(crop, (larg_destino, alt_destino), interpolation=cv2.INTER_LANCZOS4)
 
 
-def _montar_grid_dinamico(quadro: np.ndarray, centros_atuais: List[Tuple[float, float]], larg_alvo: int, alt_alvo: int) -> np.ndarray:
-    """Gera o quadro final montando o layout em Grid (1 a 4 câmeras) sem achatar imagens."""
-    qtd = len(centros_atuais)
+def _montar_grid_dinamico(quadro: np.ndarray, dados_alvos: List[Dict], larg_alvo: int, alt_alvo: int) -> np.ndarray:
+    """Gera o quadro final montando o layout em Grid (1 a 4 câmeras) com zoom individual."""
+    qtd = len(dados_alvos)
     
     # Caso 0 ou 1 Pessoa: Tela Cheia 9:16
     if qtd <= 1:
         if qtd == 1:
-            cx, cy = centros_atuais[0]
-            return _crop_proporcional_cover(quadro, cx, cy, larg_alvo, alt_alvo)
+            alvo = dados_alvos[0]
+            return _crop_proporcional_cover(quadro, alvo["cx"], alvo["cy"], larg_alvo, alt_alvo, alvo["zoom"])
         else:
-            # Padrão centralizado se nada for detectado
             alt_orig, larg_orig = quadro.shape[:2]
-            return _crop_proporcional_cover(quadro, larg_orig / 2, alt_orig / 2, larg_alvo, alt_alvo)
+            return _crop_proporcional_cover(quadro, larg_orig / 2, alt_orig / 2, larg_alvo, alt_alvo, 1.0)
 
     canvas = np.zeros((alt_alvo, larg_alvo, 3), dtype=np.uint8)
 
     # Caso 2 Pessoas: Divisão Vertical (Topo e Base)
     if qtd == 2:
         h_metade = alt_alvo // 2
-        p1 = _crop_proporcional_cover(quadro, centros_atuais[0][0], centros_atuais[0][1], larg_alvo, h_metade)
-        p2 = _crop_proporcional_cover(quadro, centros_atuais[1][0], centros_atuais[1][1], larg_alvo, alt_alvo - h_metade)
+        p1 = _crop_proporcional_cover(quadro, dados_alvos[0]["cx"], dados_alvos[0]["cy"], larg_alvo, h_metade, dados_alvos[0]["zoom"])
+        p2 = _crop_proporcional_cover(quadro, dados_alvos[1]["cx"], dados_alvos[1]["cy"], larg_alvo, alt_alvo - h_metade, dados_alvos[1]["zoom"])
         canvas[0:h_metade, :] = p1
         canvas[h_metade:, :] = p2
 
-    # Caso 3 Pessoas: Layout em "T" (2 no topo lado a lado, 1 na base)
+    # Caso 3 Pessoas: Layout em "T" (2 no topo, 1 na base)
     elif qtd == 3:
         h_metade = alt_alvo // 2
         w_metade = larg_alvo // 2
         
-        p1 = _crop_proporcional_cover(quadro, centros_atuais[0][0], centros_atuais[0][1], w_metade, h_metade)
-        p2 = _crop_proporcional_cover(quadro, centros_atuais[1][0], centros_atuais[1][1], larg_alvo - w_metade, h_metade)
-        p3 = _crop_proporcional_cover(quadro, centros_atuais[2][0], centros_atuais[2][1], larg_alvo, alt_alvo - h_metade)
+        p1 = _crop_proporcional_cover(quadro, dados_alvos[0]["cx"], dados_alvos[0]["cy"], w_metade, h_metade, dados_alvos[0]["zoom"])
+        p2 = _crop_proporcional_cover(quadro, dados_alvos[1]["cx"], dados_alvos[1]["cy"], larg_alvo - w_metade, h_metade, dados_alvos[1]["zoom"])
+        p3 = _crop_proporcional_cover(quadro, dados_alvos[2]["cx"], dados_alvos[2]["cy"], larg_alvo, alt_alvo - h_metade, dados_alvos[2]["zoom"])
         
         canvas[0:h_metade, 0:w_metade] = p1
         canvas[0:h_metade, w_metade:] = p2
@@ -116,10 +117,10 @@ def _montar_grid_dinamico(quadro: np.ndarray, centros_atuais: List[Tuple[float, 
         h_metade = alt_alvo // 2
         w_metade = larg_alvo // 2
         
-        p1 = _crop_proporcional_cover(quadro, centros_atuais[0][0], centros_atuais[0][1], w_metade, h_metade)
-        p2 = _crop_proporcional_cover(quadro, centros_atuais[1][0], centros_atuais[1][1], larg_alvo - w_metade, h_metade)
-        p3 = _crop_proporcional_cover(quadro, centros_atuais[2][0], centros_atuais[2][1], w_metade, alt_alvo - h_metade)
-        p4 = _crop_proporcional_cover(quadro, centros_atuais[3][0], centros_atuais[3][1], larg_alvo - w_metade, alt_alvo - h_metade)
+        p1 = _crop_proporcional_cover(quadro, dados_alvos[0]["cx"], dados_alvos[0]["cy"], w_metade, h_metade, dados_alvos[0]["zoom"])
+        p2 = _crop_proporcional_cover(quadro, dados_alvos[1]["cx"], dados_alvos[1]["cy"], larg_alvo - w_metade, h_metade, dados_alvos[1]["zoom"])
+        p3 = _crop_proporcional_cover(quadro, dados_alvos[2]["cx"], dados_alvos[2]["cy"], w_metade, alt_alvo - h_metade, dados_alvos[2]["zoom"])
+        p4 = _crop_proporcional_cover(quadro, dados_alvos[3]["cx"], dados_alvos[3]["cy"], larg_alvo - w_metade, alt_alvo - h_metade, dados_alvos[3]["zoom"])
         
         canvas[0:h_metade, 0:w_metade] = p1
         canvas[0:h_metade, w_metade:] = p2
@@ -147,7 +148,7 @@ def _recortar_trecho(caminho_video: str, inicio: float, fim: float) -> str:
 
 
 def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_reenquadrado: str) -> str:
-    """Recorta o vídeo adaptando dinamicamente para grids de 1 a 4 pessoas via YOLO com rastreamento suave."""
+    """Recorta o vídeo adaptando dinamicamente para grids via YOLO com filtro anti-falsos-positivos e zoom automático."""
     try:
         from ultralytics import YOLO  # type: ignore
     except ImportError as e:
@@ -174,11 +175,10 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
 
     quadro_anterior: Optional[np.ndarray] = None
     
-    # Armazena os centros dos alvos
-    centros_atuais: List[Tuple[float, float]] = []
-    centros_alvo: List[Tuple[float, float]] = []
+    alvos_atuais: List[Dict] = []
+    alvos_destino: List[Dict] = []
     
-    suavizacao = 0.08  # Fator de deslizamento suave do tracking (LERP)
+    suavizacao = 0.08
 
     while True:
         ret, quadro = captura.read()
@@ -187,54 +187,70 @@ def _reenquadrar_vertical(caminho_recorte: str, proporcao: str, caminho_recorte_
 
         troca_de_cena = _detectar_corte_de_cena(quadro, quadro_anterior)
 
-        # Executa detecção YOLO
         resultados = modelo_yolo(quadro, verbose=False)[0]
-        novos_centros = []
+        novos_alvos = []
 
         for box in resultados.boxes:
             classe = int(box.cls[0])
             confianca = float(box.conf[0])
             
-            # Classe 0 = 'person' no modelo YOLO
-            if classe == 0 and confianca > 0.35:
+            # --- AJUSTE 1: Limiar de Confiança mais rigoroso (60%) para ELIMINAR FALSOS POSITIVOS ---
+            if classe == 0 and confianca > 0.60:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
-                if (y2 - y1) > (altura_origem * 0.12):
+                alt_pessoa = y2 - y1
+                
+                # Exige altura mínima relevante para desconsiderar ruídos no cenário
+                if alt_pessoa > (altura_origem * 0.15):
                     cx = float(x1 + (x2 - x1) / 2)
-                    cy = float(y1 + (y2 - y1) / 2)
-                    novos_centros.append((cx, cy))
+                    cy = float(y1 + alt_pessoa / 2)
 
-        # Se houver mais de 4 alvos, escolhe 4 aleatoriamente de forma consistente
-        if len(novos_centros) > 4:
-            # Caso haja corte de cena, re-sorteia os 4 alvos aleatórios
+                    # --- AJUSTE 2: Lógica de ZOOM Automático para pessoas distantes ---
+                    # Se a pessoa ocupar menos de 30% da altura da tela, aplicamos zoom relativo
+                    proporcao_altura = alt_pessoa / altura_origem
+                    if proporcao_altura < 0.25:
+                        fator_zoom = 1.6  # Zoom forte para enquadrar pessoas bem longe
+                    elif proporcao_altura < 0.40:
+                        fator_zoom = 1.3  # Zoom leve/médio
+                    else:
+                        fator_zoom = 1.0  # Sem zoom se já estiver em plano médio ou próximo
+
+                    novos_alvos.append({"cx": cx, "cy": cy, "zoom": fator_zoom})
+
+        if len(novos_alvos) > 4:
             if troca_de_cena:
                 random.seed(int(captura.get(cv2.CAP_PROP_POS_FRAMES)))
-            random.shuffle(novos_centros)
-            novos_centros = novos_centros[:4]
+            random.shuffle(novos_alvos)
+            novos_alvos = novos_alvos[:4]
 
-        # Ordena da esquerda para a direita para manter posições lógicas no grid
-        novos_centros = sorted(novos_centros, key=lambda c: c[0])
+        novos_alvos = sorted(novos_alvos, key=lambda a: a["cx"])
 
-        # Se houver mudança brusca de cena ou alteração na quantidade de pessoas -> CORTE SECO
-        if troca_de_cena or len(novos_centros) != len(centros_alvo):
-            centros_alvo = novos_centros
-            centros_atuais = list(novos_centros)  # Pula transição suave (corte seco imediato)
+        # Troca de cena ou alteração na quantidade de alvos -> Corte seco imediato
+        if troca_de_cena or len(novos_alvos) != len(alvos_destino):
+            alvos_destino = novos_alvos
+            alvos_atuais = [dict(a) for a in novos_alvos]
         else:
-            centros_alvo = novos_centros
-
-            # Acompanhamento suave (LERP) para pequenos movimentos dentro da mesma cena
+            alvos_destino = novos_alvos
             novos_atuais = []
-            for idx in range(len(centros_atuais)):
-                cx_atual, cy_atual = centros_atuais[idx]
-                cx_alvo, cy_alvo = centros_alvo[idx]
+            
+            for idx in range(len(alvos_atuais)):
+                cx_at = alvos_atuais[idx]["cx"]
+                cy_at = alvos_atuais[idx]["cy"]
+                zoom_at = alvos_atuais[idx]["zoom"]
 
-                nx = cx_atual + (cx_alvo - cx_atual) * suavizacao
-                ny = cy_atual + (cy_alvo - cy_atual) * suavizacao
-                novos_atuais.append((nx, ny))
+                cx_al = alvos_destino[idx]["cx"]
+                cy_al = alvos_destino[idx]["cy"]
+                zoom_al = alvos_destino[idx]["zoom"]
 
-            centros_atuais = novos_atuais
+                # Interpolação suave para posição e zoom
+                nx = cx_at + (cx_al - cx_at) * suavizacao
+                ny = cy_at + (cy_al - cy_at) * suavizacao
+                nz = zoom_at + (zoom_al - zoom_at) * suavizacao
 
-        # Monta a imagem final sem achatar e com tracking aplicado
-        quadro_final = _montar_grid_dinamico(quadro, centros_atuais, largura_saida, altura_saida)
+                novos_atuais.append({"cx": nx, "cy": ny, "zoom": nz})
+
+            alvos_atuais = novos_atuais
+
+        quadro_final = _montar_grid_dinamico(quadro, alvos_atuais, largura_saida, altura_saida)
         gravador.write(quadro_final)
 
         quadro_anterior = quadro.copy()
